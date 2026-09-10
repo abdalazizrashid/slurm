@@ -40,6 +40,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include "src/common/fd.h"
 #include "src/common/fetch_config.h"
 #include "src/common/read_config.h"
 #include "src/common/slurm_protocol_api.h"
@@ -48,30 +49,24 @@
 #include "src/common/slurm_resolv.h"
 #include "src/common/strlcpy.h"
 #include "src/common/util-net.h"
-#include "src/common/xstring.h"
 #include "src/common/xmalloc.h"
+#include "src/common/xstring.h"
 
 #include "src/interfaces/conn.h"
 
 /* Define slurm-specific aliases for use by plugins, see slurm_xlator.h. */
 strong_alias(dump_to_memfd, slurm_dump_to_memfd);
+strong_alias(close_memfd, slurm_close_memfd);
 
 static char *slurmd_config_files[] = {
-	"acct_gather.conf",
-	"cgroup.conf",
+	"acct_gather.conf",   "cgroup.conf",
 	"cli_filter.lua",
-	"gres.conf",
-	"helpers.conf",
-	"job_container.conf",
-	"mpi.conf",
-	"namespace.yaml",
-	"oci.conf",
-	"plugstack.conf",
-	"scrun.lua",
-	"slurm.conf",
-	"topology.conf",
-	"topology.yaml",
-	NULL,
+	"gres.conf",          "helpers.conf",
+	"job_container.conf", "mpi.conf",
+	"namespace.yaml",     "oci.conf",
+	"plugstack.conf",     "scrun.lua",
+	"slurm.conf",         "topology.conf",
+	"topology.yaml",      NULL,
 };
 
 static char *client_config_files[] = {
@@ -90,6 +85,117 @@ static void _init_minimal_conf_server_config(list_t *controllers, bool use_v6,
 					     bool reinit);
 
 static int to_parent[2] = {-1, -1};
+
+#ifdef __APPLE__
+/*
+ * Clients need not call slurm_fini(). Keep pathname ownership separate from
+ * the configuration list so normal exit also cleans partially loaded configs,
+ * without taking configuration/list locks or closing possibly reused fds.
+ */
+typedef struct named_memfd {
+	char *path;
+	pid_t owner;
+	int fd;
+	dev_t device;
+	ino_t inode;
+	struct named_memfd *next;
+} named_memfd_t;
+
+static named_memfd_t *named_memfds;
+static pthread_mutex_t named_memfd_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t named_memfd_once = PTHREAD_ONCE_INIT;
+static int named_memfd_error;
+
+static void _named_memfd_lock(void)
+{
+	pthread_mutex_lock(&named_memfd_mutex);
+}
+
+static void _named_memfd_unlock(void)
+{
+	pthread_mutex_unlock(&named_memfd_mutex);
+}
+
+static void _named_memfd_child(void)
+{
+	/* A later descendant can reuse an ancestor's PID, but not its ownership. */
+	for (named_memfd_t *file = named_memfds; file; file = file->next)
+		file->owner = 0;
+	_named_memfd_unlock();
+}
+
+static void _named_memfd_exit(void)
+{
+	pid_t owner = getpid();
+
+	_named_memfd_lock();
+	for (named_memfd_t *file = named_memfds; file; file = file->next) {
+		if (file->owner == owner)
+			(void) unlink(file->path);
+	}
+	_named_memfd_unlock();
+}
+
+static void _named_memfd_init(void)
+{
+	/* A forked child must never inherit a locked registry. */
+	named_memfd_error =
+		pthread_atfork(_named_memfd_lock, _named_memfd_unlock,
+			       _named_memfd_child);
+	if (!named_memfd_error && atexit(_named_memfd_exit))
+		named_memfd_error = ENOMEM;
+}
+
+static int _named_memfd_add(int fd, const char *path)
+{
+	named_memfd_t *file = xmalloc(sizeof(*file));
+	struct stat status;
+	int rc = 0;
+
+	file->path = xstrdup(path);
+	file->owner = getpid();
+	file->fd = fd;
+	if (fstat(fd, &status)) {
+		rc = errno;
+	} else {
+		file->device = status.st_dev;
+		file->inode = status.st_ino;
+	}
+	_named_memfd_lock();
+	file->next = named_memfds;
+	named_memfds = file;
+	_named_memfd_unlock();
+	/* Register even on failure so the caller's cleanup removes the name. */
+	if (rc)
+		errno = rc;
+	return rc ? -1 : 0;
+}
+
+static int _named_memfd_remove(const char *path)
+{
+	named_memfd_t **link, *file = NULL;
+	int rc = 0;
+
+	_named_memfd_lock();
+	for (link = &named_memfds; *link; link = &(*link)->next) {
+		if (!xstrcmp((*link)->path, path)) {
+			file = *link;
+			*link = file->next;
+			/* Explicit cleanup in a child must preserve the parent. */
+			if ((file->owner == getpid()) && unlink(file->path) &&
+			    (errno != ENOENT))
+				rc = errno;
+			break;
+		}
+	}
+	_named_memfd_unlock();
+	if (file) {
+		xfree(file->path);
+		xfree(file);
+	}
+	return rc;
+}
+#endif
 
 static config_response_msg_t *_fetch_parent(pid_t pid)
 {
@@ -389,20 +495,42 @@ int dump_to_memfd(char *type, char *config, char **filename)
 	return fd;
 
 rwfail:
+	close_memfd(fd, *filename);
+	xfree(*filename);
 	fatal("%s: could not write conf file, likely out of memory", __func__);
 	return SLURM_ERROR;
 #else
-	pid_t pid = getpid();
-	char template[] = "/tmp/fake-memfd-XXXXXX";
-	int fd = mkstemp(template);
+	char template[] = "/tmp/slurm-memfd-XXXXXX";
+	int fd;
+
+#ifdef __APPLE__
+	int rc = pthread_once(&named_memfd_once, _named_memfd_init);
+
+	if (!rc)
+		rc = named_memfd_error;
+	if (rc)
+		fatal("%s: unable to register temporary file cleanup: %s",
+		      __func__, strerror(rc));
+#endif
+	fd = slurm_mkstemp(template);
 
 	if (fd < 0)
 		fatal("%s: could not create temp file", __func__);
+	xfree(*filename);
+#ifdef __APPLE__
+	/*
+	 * Darwin has no /proc/<parent>/fd namespace. /dev/fd duplicates a
+	 * process-local descriptor and its offset, so it cannot provide the
+	 * pathname contract used by scripts after their descriptors close.
+	 */
+	*filename = xstrdup(template);
+	if (_named_memfd_add(fd, *filename) || fchmod(fd, S_IRWXU))
+		goto rwfail;
+#else
 	/* immediately unlink the file so it doesn't get left around */
 	(void) unlink(template);
-
-	xfree(*filename);
-	xstrfmtcat(*filename, "/proc/%lu/fd/%d", (unsigned long) pid, fd);
+	xstrfmtcat(*filename, "/proc/%lu/fd/%d", (unsigned long) getpid(), fd);
+#endif
 
 	if (config)
 		safe_write(fd, config, strlen(config));
@@ -410,9 +538,61 @@ rwfail:
 	return fd;
 
 rwfail:
+	close_memfd(fd, *filename);
+	xfree(*filename);
 	fatal("%s: could not write conf file", __func__);
 	return SLURM_ERROR;
 #endif
+}
+
+extern void close_memfd(int fd, const char *filename)
+{
+	if (fd < 0)
+		return;
+#ifdef __APPLE__
+	int rc = _named_memfd_remove(filename);
+
+	if (rc)
+		error("%s: unable to remove temporary file %s: %s",
+		      __func__, filename, strerror(rc));
+#else
+	(void) filename;
+#endif
+	if (close(fd))
+		error("%s: unable to close temporary descriptor: %m", __func__);
+}
+
+extern int chown_memfd_files(uid_t uid, gid_t gid)
+{
+	int rc = 0;
+
+#ifdef __APPLE__
+	_named_memfd_lock();
+	for (named_memfd_t *file = named_memfds; file; file = file->next) {
+		struct stat status;
+
+		if (file->owner != getpid())
+			continue;
+		if (fstat(file->fd, &status)) {
+			rc = errno;
+			break;
+		}
+		/* Never transfer an unrelated file after descriptor reuse. */
+		if ((status.st_dev != file->device) ||
+		    (status.st_ino != file->inode)) {
+			rc = ESTALE;
+			break;
+		}
+		if ((status.st_uid == uid) && (status.st_gid == gid))
+			continue;
+		if (fchown(file->fd, uid, gid)) {
+			rc = errno;
+			break;
+		}
+	}
+	_named_memfd_unlock();
+#endif
+	return rc;
 }
 
 static int _print_controllers(void *x, void *arg)
@@ -456,7 +636,7 @@ static void _init_minimal_conf_server_config(list_t *controllers, bool use_v6,
 	else
 		slurm_init(filename);
 
-	close(fd);
+	close_memfd(fd, filename);
 	xfree(filename);
 }
 
@@ -685,7 +865,7 @@ extern void destroy_config_file(void *object)
 		return;
 
 	if (conf_file->memfd_path)
-		close(conf_file->memfd_fd);
+		close_memfd(conf_file->memfd_fd, conf_file->memfd_path);
 	xfree(conf_file->memfd_path);
 
 	xfree(conf_file->file_name);

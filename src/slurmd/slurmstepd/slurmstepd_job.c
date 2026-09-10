@@ -263,6 +263,10 @@ extern int stepd_step_rec_create(launch_tasks_request_msg_t *msg,
 		return SLURM_ERROR;
 
 	step = xmalloc(sizeof(stepd_step_rec_t));
+	slurm_cond_init(&step->state_cond, NULL);
+	slurm_mutex_init(&step->state_mutex);
+	slurm_cond_init(&step->io_cond, NULL);
+	slurm_mutex_init(&step->io_mutex);
 	step->msg = msg;
 	nodeid = nodelist_find(msg->complete_nodelist, conf->node_name);
 	step->node_name = xstrdup(conf->node_name);
@@ -275,8 +279,6 @@ extern int stepd_step_rec_create(launch_tasks_request_msg_t *msg,
 	}
 
 	step->state = SLURMSTEPD_STEP_STARTING;
-	slurm_cond_init(&step->state_cond, NULL);
-	slurm_mutex_init(&step->state_mutex);
 	step->node_tasks	= msg->tasks_to_launch[nodeid];
 	step->task_cnts  = xcalloc(msg->nnodes, sizeof(uint16_t));
 	memcpy(step->task_cnts, msg->tasks_to_launch,
@@ -507,6 +509,8 @@ extern int batch_stepd_step_rec_create(batch_job_launch_msg_t *msg)
 	step->state = SLURMSTEPD_STEP_STARTING;
 	slurm_cond_init(&step->state_cond, NULL);
 	slurm_mutex_init(&step->state_mutex);
+	slurm_cond_init(&step->io_cond, NULL);
+	slurm_mutex_init(&step->io_mutex);
 	if (msg->cpus_per_node)
 		step->cpus    = msg->cpus_per_node[0];
 	step->node_tasks  = 1;
@@ -707,6 +711,10 @@ extern void stepd_step_rec_destroy(void)
 	if (step->switch_step)
 		switch_g_stepinfo_free(step->switch_step);
 
+	slurm_cond_destroy(&step->state_cond);
+	slurm_mutex_destroy(&step->state_mutex);
+	slurm_cond_destroy(&step->io_cond);
+	slurm_mutex_destroy(&step->io_mutex);
 	xfree(step);
 }
 

@@ -47,10 +47,16 @@
 #ifdef HAVE_PAM
 
 #ifdef HAVE_PAM_PAM_APPL_H
-#  include <pam/pam_appl.h>
-#  include <pam/pam_misc.h>
+#include <pam/pam_appl.h>
 #else
 #  include <security/pam_appl.h>
+#endif
+
+#ifdef HAVE_OPENPAM_TTYCONV
+#include <security/openpam.h>
+#elif defined(HAVE_PAM_PAM_APPL_H)
+#include <pam/pam_misc.h>
+#else
 #  include <security/pam_misc.h>
 #endif
 
@@ -76,8 +82,12 @@ extern int pam_setup(char *user, char *host)
 	 * application. In this case, Slurm does not need a communication mechanism,
 	 * so the default (or null) conversation function may be used.
 	 */
+#ifdef HAVE_OPENPAM_TTYCONV
+	struct pam_conv conv = { openpam_ttyconv, NULL };
+#else
 	struct pam_conv conv = {misc_conv, NULL};
-        int             rc = 0;
+#endif
+	int rc = 0;
 
 	if (!(slurm_conf.conf_flags & CONF_FLAG_PAM))
 		return SLURM_SUCCESS;

@@ -35,6 +35,8 @@
  *  Refer to "fd.h" for documentation on public functions.
 \*****************************************************************************/
 
+#define _GNU_SOURCE
+
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -43,7 +45,9 @@
 #include <limits.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -51,6 +55,11 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/mman.h>
+#endif
 
 #include "slurm/slurm_errno.h"
 
@@ -188,6 +197,192 @@ extern const char *fcntl_modes_to_string(const int modes, char *str,
 	return str;
 }
 
+/*
+ * Darwin has no atomic close-on-exec socket/pipe creation. Serialize only the
+ * creation and fcntl operations with fork(), never a blocking wait.
+ * closeall_init() registers the handlers before Slurm starts worker threads;
+ * standalone callers must likewise initialize before concurrent fork begins.
+ */
+#if !defined(HAVE_PIPE2) || !defined(HAVE_ACCEPT4) || \
+	!defined(SOCK_CLOEXEC) || !defined(HAVE_MKOSTEMP)
+static pthread_mutex_t create_fd_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t create_fd_once = PTHREAD_ONCE_INIT;
+static int create_fd_error;
+
+static void _create_fd_prepare(void)
+{
+	pthread_mutex_lock(&create_fd_mutex);
+}
+
+static void _create_fd_complete(void)
+{
+	pthread_mutex_unlock(&create_fd_mutex);
+}
+
+#if !defined(HAVE_ACCEPT4) || !defined(HAVE_MKOSTEMP)
+static void _create_fd_cleanup(void *arg)
+{
+	(void) arg;
+	_create_fd_complete();
+}
+#endif
+
+static void _create_fd_init(void)
+{
+	create_fd_error =
+		pthread_atfork(_create_fd_prepare, _create_fd_complete,
+			       _create_fd_complete);
+}
+
+static int _create_fd_lock(void)
+{
+	int rc = pthread_once(&create_fd_once, _create_fd_init);
+
+	if (!rc)
+		rc = create_fd_error;
+	if (!rc)
+		rc = pthread_mutex_lock(&create_fd_mutex);
+	if (rc) {
+		errno = rc;
+		return -1;
+	}
+	return 0;
+}
+
+static int _create_fd_finish(int fd, bool nonblocking)
+{
+	int flags;
+
+	if (fd < 0)
+		return -1;
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
+		goto fail;
+	if ((flags = fcntl(fd, F_GETFL)) < 0)
+		goto fail;
+	/* accept() inherits O_NONBLOCK on BSD; accept4() does not. */
+	if (fcntl(fd, F_SETFL,
+		  nonblocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK)) <
+	    0)
+		goto fail;
+	return fd;
+fail:
+	flags = errno;
+	close(fd);
+	errno = flags;
+	return -1;
+}
+#endif
+
+extern int slurm_pipe(int pipefd[2], int flags)
+{
+#ifdef HAVE_PIPE2
+	return pipe2(pipefd, flags);
+#else
+	int fds[2], rc = -1, saved_errno;
+
+	if (flags & ~(O_CLOEXEC | O_NONBLOCK)) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (_create_fd_lock())
+		return -1;
+	if (!pipe(fds)) {
+		if (_create_fd_finish(fds[0], flags & O_NONBLOCK) < 0) {
+			saved_errno = errno;
+			close(fds[1]);
+			errno = saved_errno;
+		} else if (_create_fd_finish(fds[1], flags & O_NONBLOCK) < 0) {
+			saved_errno = errno;
+			close(fds[0]);
+			errno = saved_errno;
+		} else if (!(flags & O_CLOEXEC) &&
+			   ((fcntl(fds[0], F_SETFD, 0) < 0) ||
+			    (fcntl(fds[1], F_SETFD, 0) < 0))) {
+			saved_errno = errno;
+			close(fds[0]);
+			close(fds[1]);
+			errno = saved_errno;
+		} else {
+			pipefd[0] = fds[0];
+			pipefd[1] = fds[1];
+			rc = 0;
+		}
+	}
+	saved_errno = errno;
+	_create_fd_complete();
+	errno = saved_errno;
+	return rc;
+#endif
+}
+
+extern int slurm_mkstemp(char *template)
+{
+#ifdef HAVE_MKOSTEMP
+	return mkostemp(template, O_CLOEXEC);
+#else
+	int fd, saved_errno;
+
+	if (_create_fd_lock())
+		return -1;
+	pthread_cleanup_push(_create_fd_cleanup, NULL);
+	fd = mkstemp(template);
+	if ((fd >= 0) && (_create_fd_finish(fd, false) < 0)) {
+		saved_errno = errno;
+		(void) unlink(template);
+		fd = -1;
+		errno = saved_errno;
+	}
+	saved_errno = errno;
+	pthread_cleanup_pop(1);
+	errno = saved_errno;
+	return fd;
+#endif
+}
+
+extern int slurm_socket(int domain, int type, int protocol)
+{
+#ifdef SOCK_CLOEXEC
+	return socket(domain, type | SOCK_CLOEXEC, protocol);
+#else
+	int fd, saved_errno;
+
+	if (_create_fd_lock())
+		return -1;
+	fd = _create_fd_finish(socket(domain, type, protocol), false);
+	saved_errno = errno;
+	_create_fd_complete();
+	errno = saved_errno;
+	return fd;
+#endif
+}
+
+extern int slurm_accept(int fd, struct sockaddr *addr, socklen_t *addrlen,
+			bool nonblocking)
+{
+#ifdef HAVE_ACCEPT4
+	return accept4(fd, addr, addrlen,
+		       SOCK_CLOEXEC | (nonblocking ? SOCK_NONBLOCK : 0));
+#else
+	int accepted, flags, saved_errno;
+
+	if ((flags = fcntl(fd, F_GETFL)) < 0)
+		return -1;
+	if (!(flags & O_NONBLOCK)) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (_create_fd_lock())
+		return -1;
+	/* accept() is a cancellation point, even on a nonblocking listener. */
+	pthread_cleanup_push(_create_fd_cleanup, NULL);
+	accepted = _create_fd_finish(accept(fd, addr, addrlen), nonblocking);
+	saved_errno = errno;
+	pthread_cleanup_pop(1);
+	errno = saved_errno;
+	return accepted;
+#endif
+}
+
 static bool _is_fd_skipped(int fd, int *skipped, log_closeall_skip_t log_skip)
 {
 	if (fd == log_skip.log_fd)
@@ -206,12 +401,80 @@ static bool _is_fd_skipped(int fd, int *skipped, log_closeall_skip_t log_skip)
 	return false;
 }
 
+#ifdef __APPLE__
+/*
+ * proc_pidinfo is a direct system-call wrapper on Darwin. Unlike opendir or
+ * malloc, it does not take userspace locks inherited from another thread at
+ * fork. mmap/munmap provide overflow storage without entering the allocator.
+ *
+ * As with close_range, callers must prevent concurrent descriptor creation.
+ * Query actual descriptors rather than RLIMIT_NOFILE: that limit can be
+ * INT_MAX, and descriptors above a subsequently lowered limit remain open.
+ */
+static bool _closeall_darwin(int first, int *skipped,
+			     log_closeall_skip_t log_skip)
+{
+	struct proc_fdinfo local[256], *fds = local;
+	int capacity = sizeof(local), bytes;
+	bool success = false;
+
+	for (;;) {
+		errno = 0;
+		bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, fds,
+				     capacity);
+		if ((bytes < 0) || (!bytes && errno) || bytes > capacity ||
+		    (bytes % sizeof(*fds)))
+			goto done;
+		if (bytes < capacity)
+			break;
+
+		/* A full result may be truncated. Obtain the kernel's bound. */
+		bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+		if (bytes <= capacity)
+			goto done;
+		if (fds != local)
+			munmap(fds, capacity);
+		capacity = bytes;
+		fds = mmap(NULL, capacity, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANON, -1, 0);
+		if (fds == MAP_FAILED) {
+			fds = local;
+			goto done;
+		}
+	}
+
+	for (int i = 0; i < bytes / sizeof(*fds); i++) {
+		int fd = fds[i].proc_fd;
+
+		if (fd >= first && !_is_fd_skipped(fd, skipped, log_skip))
+			close(fd);
+	}
+	success = true;
+done:
+	if (fds != local)
+		munmap(fds, capacity);
+	return success;
+}
+#endif
+
 extern void closeall_except(int fd, int *skipped)
 {
 	int highest_skipped = fd;
 	log_closeall_skip_t log_skip = log_closeall_pre();
 
 	xassert(closeall_initialized);
+
+#ifdef __APPLE__
+	if (!_closeall_darwin(fd, skipped, log_skip)) {
+		static const char message[] =
+			"Slurm: cannot enumerate inherited descriptors; refusing unsafe launch\n";
+		/* This path may run after a multithreaded fork: no logging locks. */
+		(void) write(STDERR_FILENO, message, sizeof(message) - 1);
+		_exit(127);
+	}
+	log_closeall_post();
+	return;
+#endif
 
 	for (int i = 0; skipped && (skipped[i] >= 0); i++) {
 		if (skipped[i] > highest_skipped)
@@ -260,6 +523,25 @@ extern void closeall_init(void)
 	struct rlimit rlim;
 	void *self = dlopen(0, RTLD_GLOBAL | RTLD_NOW);
 	closeall_initialized = true;
+
+#ifdef __APPLE__
+	{
+		struct proc_fdinfo probe;
+
+		errno = 0;
+		if (!proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, &probe,
+				  sizeof(probe)) &&
+		    errno)
+			fatal("%s: descriptor enumeration unavailable: %m", __func__);
+	}
+#endif
+
+#if !defined(HAVE_PIPE2) || !defined(HAVE_ACCEPT4) || \
+	!defined(SOCK_CLOEXEC) || !defined(HAVE_MKOSTEMP)
+	if (_create_fd_lock())
+		fatal("%s: descriptor fork coordination failed: %m", __func__);
+	_create_fd_complete();
+#endif
 
 	if (self) {
 		close_range_f = dlsym(self, "close_range");
@@ -554,8 +836,12 @@ extern char *fd_resolve_path(int fd)
 		      __func__, path);
 	else
 		resolved = xstrdup(ret);
+#elif defined(__APPLE__)
+	char ret[PATH_MAX];
+
+	if (!fcntl(fd, F_GETPATH, ret))
+		resolved = xstrdup(ret);
 #endif
-	// TODO: use fcntl(fd, F_GETPATH, filePath) on macOS
 
 	xfree(path);
 	return resolved;

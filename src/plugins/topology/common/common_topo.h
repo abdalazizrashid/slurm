@@ -40,6 +40,18 @@
 #include "src/interfaces/topology.h"
 
 /*
+ * Topology plugins also load in slurmd and clients, where these controller
+ * variables do not exist. Darwin resolves data imports at dlopen(), even with
+ * RTLD_LAZY. Every translation unit using them must retain the weak import;
+ * a strong reference in the scheduling helpers overrides it at link time.
+ * Only controller scheduling and partition routing may dereference them.
+ */
+#if defined(__APPLE__)
+extern list_t *part_list __attribute__((weak_import));
+extern bitstr_t *idle_node_bitmap __attribute__((weak_import));
+#endif
+
+/*
  * common_topo_split_hostlist_treewidth - logic to split an input hostlist into
  *                                  a set of hostlists to forward to.
  *

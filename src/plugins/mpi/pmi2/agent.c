@@ -51,6 +51,7 @@
 #include "src/common/slurm_xlator.h"
 
 #include "src/common/eio.h"
+#include "src/common/fd.h"
 #include "src/common/macros.h"
 #include "src/common/threadpool.h"
 #include "src/common/xmalloc.h"
@@ -175,8 +176,8 @@ static int _tree_listen_read(eio_obj_t *obj, list_t *objs)
 		if (!_is_fd_ready(obj->fd))
 			return 0;
 
-		while ((sd = accept4(obj->fd, (struct sockaddr *)&addr,
-				     &size, SOCK_CLOEXEC)) < 0) {
+		while ((sd = slurm_accept(obj->fd, (struct sockaddr *) &addr,
+					  &size, false)) < 0) {
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)    /* No more connections */
@@ -300,7 +301,9 @@ _agent(void * unused)
 
 	pmi2_handle = eio_handle_create(0);
 
-	//fd_set_nonblocking(tree_sock);
+#ifndef HAVE_ACCEPT4
+	fd_set_nonblocking(tree_sock);
+#endif
 	tree_listen_obj = eio_obj_create(tree_sock, &tree_listen_ops,
 					 (void *)(-1));
 	eio_new_initial_obj(pmi2_handle, tree_listen_obj);

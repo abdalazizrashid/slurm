@@ -51,7 +51,29 @@ extern config_response_msg_t *fetch_config(char *conf_server, uint32_t flags,
 extern config_response_msg_t *fetch_config_from_controller(uint32_t flags,
 							   uint16_t port);
 
+/*
+ * Create a temporary, close-on-exec descriptor and a pathname readable by
+ * child processes until close_memfd(). On Darwin this is an owner-only,
+ * executable named file, removed at normal exit by its creating process.
+ * A crash, _exit(), or replacing the owner with exec() bypasses this cleanup.
+ * Always release both descriptor and pathname with close_memfd(), then xfree()
+ * the pathname. A NULL config creates an empty file.
+ */
 extern int dump_to_memfd(char *type, char *config, char **filename);
+
+/*
+ * Close fd (including 0) and remove Darwin's named file if this process created
+ * it. A forked child only closes its descriptor. -1 is a no-op.
+ */
+extern void close_memfd(int fd, const char *filename);
+
+/*
+ * Transfer this process's Darwin named files before permanently changing UID.
+ * The caller must stop creating/closing files during the credential change.
+ * Inherited files are untouched. Returns an errno value, or zero on success;
+ * other platforms are a no-op. A failure must prevent the credential change.
+ */
+extern int chown_memfd_files(uid_t uid, gid_t gid);
 
 extern int find_conf_by_name(void *x, void *key);
 

@@ -24,11 +24,11 @@ AC_DEFUN([X_AC_CGROUP],
     ])
 
   case ${host_os} in
-  darwin* | freebsd* | netbsd* | openbsd* )
-    with_cgroup=no
+  linux* )
+    with_cgroup=yes
     ;;
   *)
-    with_cgroup=yes
+    with_cgroup=no
     ;;
   esac
   AM_CONDITIONAL(LINUX_BUILD, test x$with_cgroup = xyes)

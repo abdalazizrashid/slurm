@@ -1831,6 +1831,13 @@ extern int eval_nodes(topology_eval_t *topo_eval)
 	}
 
 	if (topo_eval->prefer_alloc_nodes && !details_ptr->contiguous) {
+#if defined(__APPLE__)
+		if (!&idle_node_bitmap) {
+			error("%s: busy-node selection requires controller state",
+			      __func__);
+			return ESLURM_NOT_SUPPORTED;
+		}
+#endif
 		/*
 		 * Select resource on busy nodes first in order to leave
 		 * idle resources free for as long as possible so that longer

@@ -2174,7 +2174,7 @@ char **env_array_user_default(const char *username)
 				starttoken, env_loc, stoptoken);
 	xfree(stepd_path);
 
-	if (pipe2(fildes, O_CLOEXEC) < 0) {
+	if (slurm_pipe(fildes, O_CLOEXEC) < 0) {
 		fatal("pipe: %m");
 		return NULL;
 	}

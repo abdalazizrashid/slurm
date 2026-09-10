@@ -37,6 +37,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
 \*****************************************************************************/
 
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -118,6 +119,10 @@ void pty_thread_create(srun_job_t *job)
 	debug2("initialized job control port %hu", job->pty_port);
 
 	pty_listen_fd = job->pty_fd;
+	slurm_mutex_lock(&winch_lock);
+	pty_shutdown = false;
+	handle_sigwinch = false;
+	slurm_mutex_unlock(&winch_lock);
 	slurm_thread_create(NULL, &pty_tid, _pty_thread, job);
 }
 
@@ -146,10 +151,55 @@ static void _notify_winsize_change(conn_t *conn, srun_job_t *job)
 	winsz.cols = htons(job->ws_col);
 	winsz.rows = htons(job->ws_row);
 	memcpy(buf, &winsz.cols, 2);
-	memcpy(buf+2, &winsz.rows, 2);
+	memcpy(buf + 2, &winsz.rows, 2);
 	len = slurm_write_stream(conn, buf, 4);
 	if (len < sizeof(winsz))
 		error("pty: window size change notification error: %m");
+}
+
+static bool _pty_is_shutdown(void)
+{
+	bool shutdown;
+	slurm_mutex_lock(&winch_lock);
+	shutdown = pty_shutdown;
+	slurm_mutex_unlock(&winch_lock);
+	return shutdown;
+}
+
+static conn_t *_pty_accept(int listener, slurm_addr_t *addr)
+{
+	int flags = fcntl(listener, F_GETFL);
+
+	/* Readiness can disappear before accept, including on Linux. */
+	if (flags < 0 || fcntl(listener, F_SETFL, flags | O_NONBLOCK) < 0)
+		return NULL;
+	while (!_pty_is_shutdown()) {
+		struct pollfd descriptor = { .fd = listener, .events = POLLIN };
+		conn_t *conn;
+		int rc = poll(&descriptor, 1, 100);
+
+		/* Shutdown need not wake poll on a listening socket on every OS. */
+		if (_pty_is_shutdown())
+			break;
+		if (rc < 0) {
+			if (errno == EINTR)
+				continue;
+			return NULL;
+		}
+		if (!rc)
+			continue;
+		if (!(descriptor.revents & POLLIN)) {
+			errno = (descriptor.revents & POLLNVAL) ? EBADF : EIO;
+			return NULL;
+		}
+		if ((conn = slurm_accept_msg_conn(listener, addr)))
+			return conn;
+		if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
+		    errno != ECONNABORTED)
+			return NULL;
+	}
+	errno = ECANCELED;
+	return NULL;
 }
 
 static void *_pty_thread(void *arg)
@@ -162,8 +212,9 @@ static void *_pty_thread(void *arg)
 
 	conmgr_add_work_signal(SIGWINCH, _on_sigwinch, NULL);
 
-	if (!(conn = slurm_accept_msg_conn(job->pty_fd, &client_addr))) {
-		error("pty: accept failure: %m");
+	if (!(conn = _pty_accept(job->pty_fd, &client_addr))) {
+		if (errno != ECANCELED)
+			error("pty: accept failure: %m");
 		return NULL;
 	}
 
@@ -175,7 +226,8 @@ static void *_pty_thread(void *arg)
 	fd = conn_g_get_fd(conn);
 
 	net_set_keep_alive(fd);
-	while ((srun_job_state(job) <= SRUN_JOB_RUNNING) && !pty_shutdown) {
+	while ((srun_job_state(job) <= SRUN_JOB_RUNNING) &&
+	       !_pty_is_shutdown()) {
 		debug2("waiting for SIGWINCH");
 
 		slurm_mutex_lock(&winch_lock);
@@ -216,9 +268,8 @@ extern void pty_thread_fini(void)
 	slurm_mutex_unlock(&winch_lock);
 
 	/*
-	 * If slurmstepd never connected, _pty_thread() is still blocked in
-	 * accept(); shut down the listen socket to unblock it so the join
-	 * below does not hang.
+	 * Wake the listener wait when supported. Its bounded poll also checks
+	 * pty_shutdown, so joining does not depend on listener shutdown behavior.
 	 */
 	if (pty_listen_fd >= 0)
 		shutdown(pty_listen_fd, SHUT_RDWR);

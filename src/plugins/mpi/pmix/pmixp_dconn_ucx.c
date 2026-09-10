@@ -169,7 +169,11 @@ static int _load_ucx_lib(void)
 	 * we have from autoconf
 	 */
 	char *full_path = NULL;
+#ifdef __APPLE__
+	xstrfmtcat(full_path, "%s/libucp.0.dylib", PMIXP_UCX_LIBPATH);
+#else
 	xstrfmtcat(full_path, "%s/libucp.so.0", PMIXP_UCX_LIBPATH);
+#endif
 	_ucx_lib_handler = dlopen(full_path, RTLD_LAZY | RTLD_GLOBAL);
 	xfree(full_path);
 	if (_ucx_lib_handler) {
@@ -180,7 +184,12 @@ static int _load_ucx_lib(void)
 	 * known by dynamic linker.
 	 */
 #endif
+#ifdef __APPLE__
+	_ucx_lib_handler =
+		dlopen("@rpath/libucp.0.dylib", RTLD_LAZY | RTLD_GLOBAL);
+#else
 	_ucx_lib_handler = dlopen("libucp.so.0", RTLD_LAZY | RTLD_GLOBAL);
+#endif
 	if (!_ucx_lib_handler) {
 		char *err = dlerror();
 		PMIXP_ERROR("Cannot open UCX lib: %s", (err) ? err : "unknown");

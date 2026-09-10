@@ -1,6 +1,11 @@
 # Makefile for proctrack plugins
 
-SUBDIRS = linuxproc pgid
+SUBDIRS = pgid
+
+
+if LINUX_BUILD
+SUBDIRS += linuxproc
+endif
 
 if WITH_CGROUP
 SUBDIRS += cgroup

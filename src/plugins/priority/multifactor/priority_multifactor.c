@@ -56,6 +56,7 @@
 #include "slurm/slurm_errno.h"
 
 #include "src/common/parse_time.h"
+#include "src/common/run_in_daemon.h"
 #include "src/common/slurm_time.h"
 #include "src/common/state_save.h"
 #include "src/common/threadpool.h"
@@ -1807,7 +1808,7 @@ extern int init(void)
 	/* Write lock on jobs, read lock on nodes and partitions */
 
 	/* This means we aren't running from the controller so skip setup. */
-	if (cluster_cpus == NO_VAL) {
+	if (!running_in_slurmctld()) {
 		damp_factor = (long double) slurm_conf.fs_dampening_factor;
 		return SLURM_SUCCESS;
 	}

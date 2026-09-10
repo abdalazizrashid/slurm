@@ -5,6 +5,9 @@
 AUTOMAKE_OPTIONS = foreign
 
 AM_CPPFLAGS = -fPIC -I$(top_srcdir)
+if DARWIN_BUILD
+AM_CPPFLAGS += -DSLURM_LIBSLURM_PATH='"$(libdir)/libslurm.dylib"'
+endif
 PLUGIN_FLAGS = -module --export-dynamic -avoid-version
 
 pkglibdir = $(PAM_DIR)

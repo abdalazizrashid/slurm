@@ -287,15 +287,13 @@ static void _init(const int max_connections)
 
 	{
 		int fd[2] = { -1, -1 };
-		if (pipe(fd))
+		if (slurm_pipe(fd, O_CLOEXEC))
 			fatal("%s: unable to open unnamed pipe: %m", __func__);
 
 		fd_set_nonblocking(fd[0]);
-		fd_set_close_on_exec(fd[0]);
 		pctl.interrupt.receive = fd[0];
 
 		fd_set_blocking(fd[1]);
-		fd_set_close_on_exec(fd[1]);
 		pctl.interrupt.send = fd[1];
 	}
 

@@ -49,7 +49,8 @@
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
 
-void _xsystemd_notify_barrier(int fd)
+#ifdef __linux__
+static void _xsystemd_notify_barrier(int fd)
 {
 	char *payload = NULL;
 	struct pollfd ufd;
@@ -60,7 +61,7 @@ void _xsystemd_notify_barrier(int fd)
 
 	/* Need to create the pipe here */
 	int pipe_fd[2] = { -1, -1 };
-	if (pipe2(pipe_fd, O_CLOEXEC))
+	if (slurm_pipe(pipe_fd, O_CLOEXEC))
 		goto fail;
 
 	/* send the pipe over the socket */
@@ -86,9 +87,11 @@ fail:
 	xfree(payload);
 	return;
 }
+#endif
 
 extern void xsystemd_change_mainpid(pid_t pid)
 {
+#ifdef __linux__
 	char *notify_socket = getenv("NOTIFY_SOCKET");
 	char *payload = NULL;
 	struct sockaddr_un addr = { .sun_family = AF_UNIX };
@@ -128,4 +131,8 @@ rwfail:
 	error("%s: failed to send message: %m", __func__);
 	xfree(payload);
 	close(fd);
+#else
+	error("%s: systemd notifications are not supported on this platform",
+	      __func__);
+#endif
 }

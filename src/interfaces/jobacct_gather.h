@@ -76,6 +76,9 @@ typedef struct {
 	uint32_t taskid; /* contains which task number it was on */
 	uint32_t nodeid; /* contains which node number it was on */
 	stepd_step_rec_t *step; /* contains stepd job pointer */
+#ifdef __APPLE__
+	uint64_t record_id; /* local registration identity; never packed */
+#endif
 } jobacct_id_t;
 
 struct jobacctinfo {
@@ -116,6 +119,12 @@ struct jobacctinfo {
 	double last_tres_usage_out_tot;
 	time_t cur_time;
 	time_t last_time;
+#ifdef __APPLE__
+	/* Keep observed descendants attributed after the direct task exits. */
+	bool task_completed;
+	bool final_rusage_valid;
+	struct rusage final_rusage;
+#endif
 };
 
 /* Define jobacctinfo_t below to avoid including extraneous slurm headers */
@@ -151,6 +160,20 @@ extern void jobacct_gather_stat_job(jobacctinfo_t *ret_jobacct);
  * RET ptr (must free jobacctinfo_t if not NULL)
  */
 extern jobacctinfo_t *jobacct_gather_remove_task(pid_t pid);
+
+#ifdef __APPLE__
+/*
+ * Retain a completed native task for descendant sampling until step cleanup.
+ * record_id is the cookie returned through add_task's jobacct_id, or zero for
+ * a direct task whose PID cannot be registered twice in this step.
+ * Usage may be NULL for adopted processes which cannot be waited for.
+ */
+extern int jobacct_gather_complete_task(pid_t pid, uint64_t record_id,
+					const struct rusage *usage);
+/* Transfer all retained records after cleanup; caller owns the returned list.
+ * Poll while tracker membership still exists, before cleanup signals. */
+extern list_t *jobacct_gather_take_tasks(void);
+#endif
 
 extern int jobacct_gather_set_proctrack_container_id(uint64_t id);
 extern int jobacct_gather_set_mem_limit(slurm_step_id_t *step_id,

@@ -37,11 +37,7 @@
 #define _INTERFACES_CGROUP_H
 
 /* Check filesystem type */
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
-#include <magic.h>
-#include <sys/mount.h>
-#include <sys/param.h>
-#else
+#ifdef __linux__
 #include <linux/magic.h>
 #include <sys/vfs.h>
 #endif

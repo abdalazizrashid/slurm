@@ -41,6 +41,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -48,7 +49,30 @@
 #include "src/common/macros.h"
 
 /*
- * Locate close_range() if available so closeall() can use it.
+ * Create descriptors with close-on-exec set before another thread can fork.
+ * slurm_pipe() accepts O_CLOEXEC and O_NONBLOCK, like pipe2(). Socket and
+ * accepted descriptors are always close-on-exec. Socket type is an ordinary
+ * SOCK_STREAM/SOCK_DGRAM value; nonblocking selects the accepted fd's mode.
+ *
+ * On systems without accept4(), the listening socket MUST be nonblocking.
+ * Implement a blocking wait with poll() outside this function instead.
+ * This avoids blocking fork() while accept() waits for an incoming connection.
+ *
+ * Fallbacks serialize with pthread_atfork(): they protect Slurm's fork/exec
+ * launch paths, not a concurrent exec or posix_spawn in an embedding program.
+ * RET descriptor (socket/accept) or 0 (pipe) on success; -1 with errno on error.
+ */
+extern int slurm_pipe(int pipefd[2], int flags);
+extern int slurm_socket(int domain, int type, int protocol);
+extern int slurm_accept(int fd, struct sockaddr *addr, socklen_t *addrlen,
+			bool nonblocking);
+
+/* mkstemp() with close-on-exec and the same fork coordination as above. */
+extern int slurm_mkstemp(char *template);
+
+/*
+ * Initialize descriptor/fork coordination and locate close_range().
+ * Call before starting threads that create descriptors or fork children.
  */
 extern void closeall_init(void);
 

@@ -315,12 +315,37 @@ static bool _jobacct_shutdown_test(void)
 	return rc;
 }
 
+#ifdef __APPLE__
+static uint64_t next_task_record_id;
+static void _update_darwin_rusage(jobacctinfo_t *jobacct, struct rusage *usage);
+
+/* Caller holds task_list_lock. Retain wait usage after subsequent samples. */
+static void _poll_native_tasks(bool profile)
+{
+	list_itr_t *itr;
+	jobacctinfo_t *jobacct;
+
+	(*(ops.poll_data))(task_list, cont_id, profile);
+	itr = list_iterator_create(task_list);
+	while ((jobacct = list_next(itr))) {
+		if (jobacct->final_rusage_valid)
+			_update_darwin_rusage(jobacct, &jobacct->final_rusage);
+	}
+	list_iterator_destroy(itr);
+}
+#endif
+
 static void _poll_data(bool profile)
 {
 	/* Update the data */
 	slurm_mutex_lock(&task_list_lock);
-	if (task_list)
+	if (task_list) {
+#ifdef __APPLE__
+		_poll_native_tasks(profile);
+#else
 		(*(ops.poll_data))(task_list, cont_id, profile);
+#endif
+	}
 	slurm_mutex_unlock(&task_list_lock);
 }
 
@@ -678,9 +703,21 @@ extern int jobacct_gather_add_task(pid_t pid, jobacct_id_t *jobacct_id,
 
 	jobacct->pid = pid;
 	memcpy(&jobacct->id, jobacct_id, sizeof(jobacct_id_t));
+#ifdef __APPLE__
+	if (next_task_record_id == UINT64_MAX) {
+		errno = EOVERFLOW;
+		goto error;
+	}
+	jobacct->id.record_id = ++next_task_record_id;
+	jobacct_id->record_id = jobacct->id.record_id;
+	jobacct_id = &jobacct->id;
+#endif
 	debug2("adding task %u pid %d on node %u to jobacct",
 	       jobacct_id->taskid, pid, jobacct_id->nodeid);
-	(*(ops.add_task))(pid, jobacct_id);
+	if ((*(ops.add_task))(pid, jobacct_id) != SLURM_SUCCESS) {
+		error("Unable to register pid %d for task accounting", pid);
+		goto error;
+	}
 	list_push(task_list, jobacct);
 	slurm_mutex_unlock(&task_list_lock);
 
@@ -807,7 +844,9 @@ extern jobacctinfo_t *jobacct_gather_remove_task(pid_t pid)
 
 	/* poll data one last time before removing task
 	 * mainly for updating energy consumption */
+#ifndef __APPLE__
 	_poll_data(1);
+#endif
 
 	if (_jobacct_shutdown_test())
 		return NULL;
@@ -817,6 +856,16 @@ extern jobacctinfo_t *jobacct_gather_remove_task(pid_t pid)
 		error("no task list created!");
 		goto error;
 	}
+
+#ifdef __APPLE__
+	/*
+	 * Sample known descendants while the owner record is still registered.
+	 * Keep sampling and removal in one critical section so a concurrent
+	 * removal cannot discard the native plugin's ownership state between
+	 * the final sample and its transfer to the caller.
+	 */
+	_poll_native_tasks(true);
+#endif
 
 	if (!pid)
 		jobacct = list_pop(task_list);
@@ -835,6 +884,58 @@ error:
 	slurm_mutex_unlock(&task_list_lock);
 	return jobacct;
 }
+
+#ifdef __APPLE__
+extern int jobacct_gather_complete_task(pid_t pid, uint64_t record_id,
+					const struct rusage *usage)
+{
+	list_itr_t *itr;
+	jobacctinfo_t *jobacct, *completed = NULL;
+
+	if (plugin_inited == PLUGIN_NOOP || _jobacct_shutdown_test())
+		return SLURM_SUCCESS;
+	slurm_mutex_lock(&task_list_lock);
+	if (!task_list) {
+		slurm_mutex_unlock(&task_list_lock);
+		return SLURM_ERROR;
+	}
+	itr = list_iterator_create(task_list);
+	while ((jobacct = list_next(itr))) {
+		if (jobacct->pid != pid ||
+		    (record_id && jobacct->id.record_id != record_id))
+			continue;
+		completed = jobacct;
+		if (usage) {
+			jobacct->final_rusage = *usage;
+			jobacct->final_rusage_valid = true;
+		}
+		break;
+	}
+	list_iterator_destroy(itr);
+	/* Let the native plugin reconcile wait usage with this final snapshot. */
+	_poll_native_tasks(true);
+	if (completed)
+		completed->task_completed = true;
+	slurm_mutex_unlock(&task_list_lock);
+	/* Helper children need not have registered accounting records. */
+	return SLURM_SUCCESS;
+}
+
+extern list_t *jobacct_gather_take_tasks(void)
+{
+	list_t *completed = NULL;
+
+	if (plugin_inited == PLUGIN_NOOP || _jobacct_shutdown_test())
+		return NULL;
+	slurm_mutex_lock(&task_list_lock);
+	if (task_list) {
+		completed = task_list;
+		task_list = list_create(jobacctinfo_destroy);
+	}
+	slurm_mutex_unlock(&task_list_lock);
+	return completed;
+}
+#endif
 
 extern int jobacct_gather_set_proctrack_container_id(uint64_t id)
 {
@@ -935,6 +1036,43 @@ extern void jobacctinfo_destroy(void *object)
 	xfree(jobacct);
 }
 
+#ifdef __APPLE__
+static void _update_darwin_rusage(jobacctinfo_t *jobacct, struct rusage *usage)
+{
+	uint64_t cpu;
+
+	/* Preserve the greater complete timeval, including its fractional part. */
+	if ((usage->ru_utime.tv_sec > jobacct->user_cpu_sec) ||
+	    ((usage->ru_utime.tv_sec == jobacct->user_cpu_sec) &&
+	     (usage->ru_utime.tv_usec > jobacct->user_cpu_usec))) {
+		jobacct->user_cpu_sec = usage->ru_utime.tv_sec;
+		jobacct->user_cpu_usec = usage->ru_utime.tv_usec;
+	}
+	if ((usage->ru_stime.tv_sec > jobacct->sys_cpu_sec) ||
+	    ((usage->ru_stime.tv_sec == jobacct->sys_cpu_sec) &&
+	     (usage->ru_stime.tv_usec > jobacct->sys_cpu_usec))) {
+		jobacct->sys_cpu_sec = usage->ru_stime.tv_sec;
+		jobacct->sys_cpu_usec = usage->ru_stime.tv_usec;
+	}
+	/* Include final wait usage even when the process exited between polls. */
+	if ((jobacct->tres_count <= TRES_ARRAY_CPU) ||
+	    !jobacct->tres_usage_in_tot)
+		return;
+	cpu = (jobacct->user_cpu_sec + jobacct->sys_cpu_sec) * CPU_TIME_ADJ +
+	      (jobacct->user_cpu_usec + jobacct->sys_cpu_usec) /
+		      (1000000 / CPU_TIME_ADJ);
+	if ((jobacct->tres_usage_in_tot[TRES_ARRAY_CPU] == INFINITE64) ||
+	    (cpu > jobacct->tres_usage_in_tot[TRES_ARRAY_CPU]))
+		jobacct->tres_usage_in_tot[TRES_ARRAY_CPU] = cpu;
+	cpu = jobacct->tres_usage_in_tot[TRES_ARRAY_CPU];
+	if ((jobacct->tres_usage_in_max[TRES_ARRAY_CPU] == INFINITE64) ||
+	    (cpu > jobacct->tres_usage_in_max[TRES_ARRAY_CPU]))
+		jobacct->tres_usage_in_max[TRES_ARRAY_CPU] = cpu;
+	jobacct->tres_usage_in_min[TRES_ARRAY_CPU] =
+		jobacct->tres_usage_in_max[TRES_ARRAY_CPU];
+}
+#endif
+
 extern int jobacctinfo_setinfo(jobacctinfo_t *jobacct,
 			       enum jobacct_data_type type, void *data,
 			       uint16_t protocol_version)
@@ -986,12 +1124,16 @@ extern int jobacctinfo_setinfo(jobacctinfo_t *jobacct,
 
 		break;
 	case JOBACCT_DATA_RUSAGE:
+#ifdef __APPLE__
+		_update_darwin_rusage(jobacct, rusage);
+#else
 		if (rusage->ru_utime.tv_sec > jobacct->user_cpu_sec)
 			jobacct->user_cpu_sec = rusage->ru_utime.tv_sec;
 		jobacct->user_cpu_usec = rusage->ru_utime.tv_usec;
 		if (rusage->ru_stime.tv_sec > jobacct->sys_cpu_sec)
 			jobacct->sys_cpu_sec = rusage->ru_stime.tv_sec;
 		jobacct->sys_cpu_usec = rusage->ru_stime.tv_usec;
+#endif
 		break;
 	case JOBACCT_DATA_TOT_RSS:
 		jobacct->tres_usage_in_tot[TRES_ARRAY_MEM] = *uint64;
@@ -1245,7 +1387,10 @@ extern void jobacctinfo_aggregate(jobacctinfo_t *dest, jobacctinfo_t *from)
 			dest->sys_cpu_sec += dest->sys_cpu_usec / 1E6;
 			dest->sys_cpu_usec = dest->sys_cpu_usec % (int) 1E6;
 		}
-		dest->act_cpufreq += from->act_cpufreq;
+		if (from->act_cpufreq == NO_VAL)
+			dest->act_cpufreq = NO_VAL;
+		else if (dest->act_cpufreq != NO_VAL)
+			dest->act_cpufreq += from->act_cpufreq;
 	}
 	if (dest->energy.consumed_energy != NO_VAL64) {
 		if (from->energy.consumed_energy == NO_VAL64)

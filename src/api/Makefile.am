@@ -145,6 +145,7 @@ convenience_libs = \
 
 libslurm_la_SOURCES =
 libslurm_la_LIBADD = $(convenience_libs)
+libslurm_la_DEPENDENCIES = $(convenience_libs) $(VERSION_SCRIPT)
 libslurm_la_LDFLAGS        = \
         $(LIB_LDFLAGS) \
         -version-info $(current):$(rev):$(age) \
@@ -152,6 +153,7 @@ libslurm_la_LDFLAGS        = \
 
 libslurmfull_la_SOURCES =
 libslurmfull_la_LIBADD = $(convenience_libs)
+libslurmfull_la_DEPENDENCIES = $(convenience_libs) $(FULL_VERSION_SCRIPT)
 libslurmfull_la_LDFLAGS        = \
         $(LIB_LDFLAGS) \
 	-avoid-version \
@@ -159,6 +161,7 @@ libslurmfull_la_LDFLAGS        = \
 
 libslurm_pmi_la_SOURCES =
 libslurm_pmi_la_LIBADD = $(convenience_libs)
+libslurm_pmi_la_DEPENDENCIES = $(convenience_libs) $(VERSION_SCRIPT)
 libslurm_pmi_la_LDFLAGS        = \
         $(LIB_LDFLAGS) \
 	-avoid-version \

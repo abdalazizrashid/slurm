@@ -79,6 +79,13 @@ typedef struct node_record node_record_t;
 #define ACCOUNTING_ENFORCE_NO_STEPS SLURM_BIT(6)
 #define ACCOUNTING_ENFORCE_TRES   SLURM_BIT(7)
 
+/* Native system directory for runtime sockets and configless discovery. */
+#ifdef __APPLE__
+#define SLURM_RUN_DIR "/var/run"
+#else
+#define SLURM_RUN_DIR "/run"
+#endif
+
 #define DEFAULT_ACCOUNTING_TRES  "cpu,mem,energy,node,billing,fs/disk,vmem,pages"
 #define DEFAULT_ACCOUNTING_DB      "slurm_acct_db"
 #define DEFAULT_ACCOUNTING_ENFORCE  0

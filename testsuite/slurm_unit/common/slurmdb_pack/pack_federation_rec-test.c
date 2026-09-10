@@ -61,6 +61,7 @@ START_TEST(pack_back2_federation_rec)
 	pack_fr->cluster_list = list_create(slurmdb_destroy_cluster_rec);
 
 	slurmdb_cluster_rec_t *x = xmalloc(sizeof(slurmdb_cluster_rec_t));
+	slurmdb_init_cluster_rec(x, false);
 	x->name = xstrdup("Thomas Aquinas");
 
 	list_append(pack_fr->cluster_list, x);
@@ -144,6 +145,7 @@ START_TEST(pack_back1_federation_rec)
 	pack_fr->cluster_list = list_create(slurmdb_destroy_cluster_rec);
 
 	slurmdb_cluster_rec_t *x = xmalloc(sizeof(slurmdb_cluster_rec_t));
+	slurmdb_init_cluster_rec(x, false);
 	x->name = xstrdup("Thomas Aquinas");
 
 	list_append(pack_fr->cluster_list, x);

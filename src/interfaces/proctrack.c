@@ -189,6 +189,7 @@ extern int proctrack_g_add(stepd_step_rec_t *step, pid_t pid)
 	return rc;
 }
 
+#ifdef __linux__
 /* Determine if core dump in progress
  * stat_fname - Pathname of the form /proc/<PID>/stat
  * RET - True if core dump in progress, otherwise false
@@ -370,6 +371,8 @@ static void _spawn_signal_thread(uint64_t cont_id, int signal)
 	slurm_thread_create_detached(NULL, _sig_agent, agent_arg_ptr);
 }
 
+#endif /* __linux__ */
+
 /*
  * Signal all processes within a container
  * cont_id IN - container ID as returned by proctrack_g_create()
@@ -382,6 +385,7 @@ extern int proctrack_g_signal(uint64_t cont_id, int signal)
 {
 	xassert(g_context);
 
+#ifdef __linux__
 	if (signal == SIGKILL) {
 		pid_t *pids = NULL, stepd_pid = getpid();
 		int i, j, npids = 0, hung_pids = 0;
@@ -421,6 +425,7 @@ extern int proctrack_g_signal(uint64_t cont_id, int signal)
 		}
 	}
 
+#endif
 	return (*(ops.signal)) (cont_id, signal);
 }
 

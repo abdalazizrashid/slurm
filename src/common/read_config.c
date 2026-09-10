@@ -3260,8 +3260,8 @@ static int _establish_config_source(char **config_file, bool *memfd)
 	 * Check /run for a usable symlink. This will only exist if slurmd
 	 * is running in configless mode.
 	 */
-	if (!stat("/run/slurm/conf/slurm.conf", &stat_buf)) {
-		*config_file = xstrdup("/run/slurm/conf/slurm.conf");
+	if (!stat(SLURM_RUN_DIR "/slurm/conf/slurm.conf", &stat_buf)) {
+		*config_file = xstrdup(SLURM_RUN_DIR "/slurm/conf/slurm.conf");
 		debug2("%s: using config_file=%s (cached)",
 		       __func__, *config_file);
 		return SLURM_SUCCESS;

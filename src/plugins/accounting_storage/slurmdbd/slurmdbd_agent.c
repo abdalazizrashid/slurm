@@ -48,6 +48,13 @@
 
 #include "slurmdbd_agent.h"
 
+/* Controller-only state may be absent when this plugin is loaded by a client. */
+#if defined(__APPLE__)
+extern uint16_t running_cache __attribute__((weak_import));
+extern pthread_mutex_t assoc_cache_mutex __attribute__((weak_import));
+extern pthread_cond_t assoc_cache_cond __attribute__((weak_import));
+#endif
+
 enum {
 	MAX_DBD_ACTION_DISCARD,
 	MAX_DBD_ACTION_EXIT

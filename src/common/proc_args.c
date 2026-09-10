@@ -53,15 +53,16 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
-#include "src/interfaces/gres.h"
 #include "src/common/list.h"
 #include "src/common/log.h"
-#include "src/common/proc_args.h"
 #include "src/common/parse_time.h"
+#include "src/common/proc_args.h"
+#include "src/common/read_config.h"
 #include "src/common/slurm_protocol_api.h"
-#include "src/interfaces/acct_gather_profile.h"
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
+#include "src/interfaces/acct_gather_profile.h"
+#include "src/interfaces/gres.h"
 
 enum {
 	RESV_NEW, /* It is a new reservation */
@@ -1796,7 +1797,8 @@ extern bool valid_runtime_directory(char *runtime_dir)
 	 * Example:
 	 * RuntimeDirectory=foo/bar results in RUNTIME_DIRECTORY=/run/foo/bar.
 	 */
-	if (xstrncmp(runtime_dir, "/run/", 5) || (strlen(runtime_dir) < 6))
+	if (xstrncmp(runtime_dir, SLURM_RUN_DIR "/", sizeof(SLURM_RUN_DIR)) ||
+	    (strlen(runtime_dir) <= sizeof(SLURM_RUN_DIR)))
 		return false;
 
 	return true;

@@ -70,6 +70,8 @@
 #  ifdef HAVE_UTMP_H
 #    include <utmp.h>
 #  endif
+#elif defined(HAVE_UTIL_H)
+#include <util.h>
 #endif
 
 #ifdef WITH_SELINUX
@@ -278,6 +280,27 @@ static void _local_jobacctinfo_aggregate(
 
 	jobacctinfo_aggregate(dest, from);
 }
+
+#ifdef __APPLE__
+/* Account each retained owner exactly once, after process cleanup. */
+static void _finish_native_accounting(void)
+{
+	list_t *completed = jobacct_gather_take_tasks();
+	jobacctinfo_t *jobacct;
+
+	if (completed) {
+		while ((jobacct = list_pop(completed))) {
+			if (jobacct->energy.consumed_energy)
+				step->jobacct->energy.consumed_energy = 0;
+			_local_jobacctinfo_aggregate(step->jobacct, jobacct);
+			jobacctinfo_destroy(jobacct);
+		}
+		FREE_NULL_LIST(completed);
+	}
+	acct_gather_profile_endpoll();
+	acct_gather_profile_g_node_step_end();
+}
+#endif
 
 /*
  * Find the maximum task return code
@@ -554,6 +577,7 @@ claim:
 	if (reclaim_privileges(&sprivs) < 0) {
 		error("sete{u/g}id(%lu/%lu): %m",
 		      (u_long) sprivs.saved_uid, (u_long) sprivs.saved_gid);
+		rc = ESLURMD_SET_UID_OR_GID_ERROR;
 	}
 
 	if (!rc && !step->batch)
@@ -1385,8 +1409,10 @@ rwfail:
 
 static int _spawn_job_container(void)
 {
+#ifndef __APPLE__
 	jobacctinfo_t *jobacct = NULL;
 	struct rusage rusage;
+#endif
 	jobacct_id_t jobacct_id;
 	int rc = SLURM_SUCCESS;
 
@@ -1441,8 +1467,8 @@ static int _spawn_job_container(void)
 			pid_t pid;
 			int to_parent[2] = {-1, -1};
 
-			if (pipe2(to_parent, O_CLOEXEC)) {
-				error("%s: pipe2() failed: %m", __func__);
+			if (slurm_pipe(to_parent, O_CLOEXEC)) {
+				error("%s: slurm_pipe() failed: %m", __func__);
 				rc = SLURM_ERROR;
 				goto x11_fail;
 			}
@@ -1487,7 +1513,13 @@ x11_fail:
 	jobacct_id.taskid = step->nodeid; /* Treat node ID as global task ID */
 	jobacct_id.step = step;
 	jobacct_gather_set_proctrack_container_id(step->cont_id);
-	jobacct_gather_add_task(0, &jobacct_id, 1);
+	if (jobacct_gather_add_task(0, &jobacct_id, 1) != SLURM_SUCCESS) {
+		error("Unable to register extern step accounting");
+		rc = SLURM_ERROR;
+		set_job_state(SLURMSTEPD_STEP_ENDING);
+		close_slurmd_conn(rc);
+		goto fail1;
+	}
 
 	set_job_state(SLURMSTEPD_STEP_RUNNING);
 	if (!slurm_conf.job_acct_gather_freq)
@@ -1538,6 +1570,7 @@ x11_fail:
 	}
 
 	/* remove all tracked tasks */
+#ifndef __APPLE__
 	while ((jobacct = jobacct_gather_remove_task(0))) {
 		if (jobacct->pid)
 			jobacctinfo_setinfo(jobacct, JOBACCT_DATA_RUSAGE,
@@ -1546,18 +1579,32 @@ x11_fail:
 		_local_jobacctinfo_aggregate(step->jobacct, jobacct);
 		jobacctinfo_destroy(jobacct);
 	}
+#endif
 	step_complete.rank = step->nodeid;
+#ifndef __APPLE__
 	acct_gather_profile_endpoll();
 	acct_gather_profile_g_node_step_end();
+#endif
 
 	/* Call the other plugins to clean up
 	 * the cgroup hierarchy.
 	 */
 	set_job_state(SLURMSTEPD_STEP_ENDING);
 	step_terminate_monitor_start();
+#ifdef __APPLE__
+	/* The tracker may destroy membership after wait; sample before signals. */
+	jobacct_gather_stat_task(0, true);
+#endif
 	proctrack_g_signal(step->cont_id, SIGKILL);
-	proctrack_g_wait(step->cont_id);
+	if (proctrack_g_wait(step->cont_id) != SLURM_SUCCESS) {
+		stepd_drain_node("Process tracking could not confirm cleanup");
+		if (!rc)
+			rc = ESLURMD_KILL_TASK_FAILED;
+	}
 	step_terminate_monitor_stop();
+#ifdef __APPLE__
+	_finish_native_accounting();
+#endif
 
 	/*
 	 * When an event is registered using the cgroups notification API and
@@ -1783,8 +1830,10 @@ extern int job_manager(void)
 	 * acct_gather_profile_fini() and task_g_post_step().
 	 */
 	_wait_for_all_tasks();
+#ifndef __APPLE__
 	acct_gather_profile_endpoll();
 	acct_gather_profile_g_node_step_end();
+#endif
 	set_job_state(SLURMSTEPD_STEP_ENDING);
 
 fail2:
@@ -1802,10 +1851,21 @@ fail2:
 	set_job_state(SLURMSTEPD_STEP_ENDING);
 	step_terminate_monitor_start();
 	if (step->cont_id != 0) {
+#ifdef __APPLE__
+		jobacct_gather_stat_task(0, true);
+#endif
 		proctrack_g_signal(step->cont_id, SIGKILL);
-		proctrack_g_wait(step->cont_id);
+		if (proctrack_g_wait(step->cont_id) != SLURM_SUCCESS) {
+			stepd_drain_node(
+				"Process tracking could not confirm cleanup");
+			if (!rc)
+				rc = ESLURMD_KILL_TASK_FAILED;
+		}
 	}
 	step_terminate_monitor_stop();
+#ifdef __APPLE__
+	_finish_native_accounting();
+#endif
 	if (!step->batch && (step->step_id.step_id != SLURM_INTERACTIVE_STEP)) {
 		/* This sends a SIGKILL to the pgid */
 		if (switch_g_job_postfini(step) < 0) {
@@ -1985,7 +2045,7 @@ static struct exec_wait_info * _exec_wait_info_create (int i)
 	int fdpair[2];
 	struct exec_wait_info * e;
 
-	if (pipe2(fdpair, O_CLOEXEC) < 0) {
+	if (slurm_pipe(fdpair, O_CLOEXEC) < 0) {
 		error ("_exec_wait_info_create: pipe: %m");
 		return NULL;
 	}
@@ -2133,12 +2193,13 @@ static int exec_wait_kill_children(list_t *exec_wait_list)
 
 static void _prepare_stdio(stepd_step_task_info_t *task)
 {
-#ifdef HAVE_PTY_H
+#ifdef HAVE_LOGIN_TTY
 	if ((step->flags & LAUNCH_PTY) && (task->gtid == 0)) {
-		if (login_tty(task->stdin_fd))
+		if (login_tty(task->stdin_fd)) {
 			error("login_tty: %m");
-		else
-			debug3("login_tty good");
+			_exit(1);
+		}
+		debug3("login_tty good");
 		return;
 	}
 #endif
@@ -2196,7 +2257,7 @@ static int _fork_all_tasks(bool *io_initialized)
 	 */
 	if (reclaim_privileges(&sprivs) < 0) {
 		error("Unable to reclaim privileges");
-		/* Don't bother erroring out here */
+		rc = ESLURMD_SET_UID_OR_GID_ERROR;
 	}
 	if (rc)
 		goto fail1; /* pam_setup error */
@@ -2404,7 +2465,9 @@ static int _fork_all_tasks(bool *io_initialized)
 	 */
 	if (reclaim_privileges(&sprivs) < 0) {
 		error ("Unable to reclaim privileges");
-		/* Don't bother erroring out here */
+		rc = ESLURMD_SET_UID_OR_GID_ERROR;
+		exec_wait_kill_children(exec_wait_list);
+		goto fail2;
 	}
 
 	if (chdir(saved_cwd) < 0) {
@@ -2437,12 +2500,18 @@ static int _fork_all_tasks(bool *io_initialized)
 			/* start polling on the last task */
 			jobacct_gather_set_proctrack_container_id(
 				step->cont_id);
-			jobacct_gather_add_task(step->task[i]->pid, &jobacct_id,
-						1);
+			rc = jobacct_gather_add_task(step->task[i]->pid,
+						     &jobacct_id, 1);
 		} else {
 			/* don't poll yet */
-			jobacct_gather_add_task(step->task[i]->pid, &jobacct_id,
-						0);
+			rc = jobacct_gather_add_task(step->task[i]->pid,
+						     &jobacct_id, 0);
+		}
+		if (rc != SLURM_SUCCESS) {
+			error("Unable to register accounting for task %d (pid %d)",
+			      i, step->task[i]->pid);
+			rc = SLURM_ERROR;
+			goto fail2;
 		}
 
 		/*
@@ -2506,7 +2575,7 @@ fail4:
 fail3:
 	if (reclaim_privileges(&sprivs) < 0) {
 		error("Unable to reclaim privileges");
-		/* Don't bother erroring out here */
+		rc = ESLURMD_SET_UID_OR_GID_ERROR;
 	}
 fail2:
 	FREE_NULL_LIST(exec_wait_list);
@@ -2679,7 +2748,9 @@ static int _wait_for_any_task(bool waitflag)
 	do {
 		stepd_step_task_info_t *t = NULL;
 		int rc = 0;
+#ifndef __APPLE__
 		jobacctinfo_t *jobacct = NULL;
+#endif
 		char **tmp_env;
 
 		pid = proctrack_g_wait_for_any_task(step, &t, waitflag);
@@ -2701,6 +2772,10 @@ static int _wait_for_any_task(bool waitflag)
 		}
 
 		/************* acct stuff ********************/
+#ifdef __APPLE__
+		if (jobacct_gather_complete_task(pid, 0, t ? &t->rusage : NULL))
+			error("Unable to retain accounting for completed task pid %d", pid);
+#else
 		jobacct = jobacct_gather_remove_task(pid);
 		if (jobacct) {
 			jobacctinfo_setinfo(jobacct,
@@ -2721,6 +2796,7 @@ static int _wait_for_any_task(bool waitflag)
 			_local_jobacctinfo_aggregate(step->jobacct, jobacct);
 			jobacctinfo_destroy(jobacct);
 		}
+#endif
 		acct_gather_profile_g_task_end(pid);
 		/*********************************************/
 

@@ -47,6 +47,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 #ifndef POLLRDHUP
 #define POLLRDHUP POLLHUP
 #endif
@@ -58,6 +62,7 @@
 #include "src/common/run_command.h"
 #include "src/common/slurm_time.h"
 #include "src/common/timers.h"
+#include "src/common/uid.h"
 #include "src/common/xassert.h"
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
@@ -134,12 +139,36 @@ extern void run_command_add_to_script(char **script_body, char *new_str)
 /* used to initialize run_command module */
 extern int run_command_init(int argc, char **argv, char *binary)
 {
+	char *executable_path = NULL;
+	int rc;
+
 	command_shutdown = 0;
 
 #if defined(__linux__)
 	if (!binary && !script_launcher)
 		binary = "/proc/self/exe";
 #endif /* !__linux__ */
+
+#ifdef __APPLE__
+	if (!binary) {
+		uint32_t size = PATH_MAX;
+		char *path = xmalloc(size);
+
+		if (_NSGetExecutablePath(path, &size)) {
+			xrealloc(path, size);
+			if (_NSGetExecutablePath(path, &size)) {
+				xfree(path);
+				return SLURM_ERROR;
+			}
+		}
+		/* dyld may return a relative path or one containing symlinks. */
+		executable_path = realpath(path, NULL);
+		xfree(path);
+		if (!executable_path)
+			return SLURM_ERROR;
+		binary = executable_path;
+	}
+#endif
 
 	/* Use argv[0] as fallback with absolute path */
 	if (!binary && (argc > 0) && (argv[0][0] == '/'))
@@ -181,11 +210,13 @@ extern int run_command_init(int argc, char **argv, char *binary)
 	if (access(binary, R_OK | X_OK)) {
 		error("%s: %s cannot be executed as an intermediate launcher, doing direct launch.",
 		      __func__, binary);
-		return SLURM_ERROR;
+		rc = SLURM_ERROR;
 	} else {
 		script_launcher = xstrdup(binary);
-		return SLURM_SUCCESS;
+		rc = SLURM_SUCCESS;
 	}
+	free(executable_path);
+	return rc;
 }
 
 /* used to terminate any outstanding commands */
@@ -307,10 +338,16 @@ static void _run_command_child_exec(int fd, const char *path, char **argv,
 	if (!env || !env[0])
 		env = environ;
 
-	if (fd >= 0)
+	if (fd >= 0) {
+#ifdef HAVE_FEXECVE
 		fexecve(fd, argv, env);
-	else
+#else
+		/* A pathname fallback would not preserve descriptor identity. */
+		errno = ENOTSUP;
+#endif
+	} else {
 		execve(path, argv, env);
+	}
 	error("%s: execv(%s): %m", __func__, path);
 	_exit(127);
 }
@@ -328,12 +365,17 @@ static void _run_command_child_pre_exec(void)
 	 * sync euid -> ruid, egid -> rgid to avoid issues with fork'd
 	 * processes using access() or similar calls.
 	 */
+#ifdef HAVE_SETRESGID
 	if (setresgid(getegid(), getegid(), -1)) {
-		error("%s: Unable to setresgid()", __func__);
+#else
+	/* exec will replace saved IDs with these effective IDs as well. */
+	if (setregid(getegid(), getegid())) {
+#endif
+		error("%s: Unable to synchronize real/effective gid: %m", __func__);
 		_exit(127);
 	}
-	if (setresuid(geteuid(), geteuid(), -1)) {
-		error("%s: Unable to setresuid()", __func__);
+	if (setuid_real_effective(geteuid())) {
+		error("%s: Unable to synchronize real/effective uid: %m", __func__);
 		_exit(127);
 	}
 }
@@ -380,8 +422,9 @@ extern char *run_command(run_command_args_t *args)
 			return resp;
 		}
 	}
-	if ((pipe2(pfd, O_CLOEXEC) != 0) ||
-	    (args->write_to_child && (pipe2(pfd_to_child, O_CLOEXEC) != 0))) {
+	if ((slurm_pipe(pfd, O_CLOEXEC) != 0) ||
+	    (args->write_to_child &&
+	     (slurm_pipe(pfd_to_child, O_CLOEXEC) != 0))) {
 		error("%s: pipe(): %m", __func__);
 		fd_close(&pfd[0]);
 		fd_close(&pfd[1]);

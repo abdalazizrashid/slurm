@@ -42,9 +42,17 @@ case "$host" in
 			[Define slurm_ prefix function aliases for plugins]) ;;
 esac
 
+case "$host_os" in
+	darwin*) darwin_build=yes ;;
+	*)       darwin_build=no ;;
+esac
+AM_CONDITIONAL(DARWIN_BUILD, test "x$darwin_build" = "xyes")
+
 dnl Checks for programs.
 dnl
 AC_PROG_CC
+dnl Initialize the C preprocessor outside optional dependency branches.
+AC_PROG_CPP
 AC_PROG_CXX
 AC_PROG_MAKE_SET
 LT_INIT
@@ -60,6 +68,16 @@ AC_SUBST(AR_FLAGS, [cr])
 
 AM_CONDITIONAL(WITH_CXX, test -n "$ac_ct_CXX")
 AM_CONDITIONAL(WITH_GNU_LD, test "$with_gnu_ld" = "yes")
+
+dnl Keep indirect dependencies of slurmd available to dynamically loaded plugins.
+dnl Apple ld retains these by default and does not accept --no-as-needed.
+SLURM_NO_AS_NEEDED=""
+slurm_save_LDFLAGS=$LDFLAGS
+LDFLAGS="$LDFLAGS -Wl,--no-as-needed"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])],
+	[SLURM_NO_AS_NEEDED="-Wl,--no-as-needed"])
+LDFLAGS=$slurm_save_LDFLAGS
+AC_SUBST([SLURM_NO_AS_NEEDED])
 
 AC_PATH_PROG([SLEEP_CMD], [sleep], [/bin/sleep])
 AC_DEFINE_UNQUOTED([SLEEP_CMD], ["$SLEEP_CMD"], [Define path to sleep command])
@@ -108,10 +126,10 @@ AC_CHECK_HEADERS(mcheck.h values.h socket.h sys/socket.h  \
 		 sysint.h inttypes.h termcap.h netdb.h sys/socket.h  \
 		 sys/systemcfg.h sys/dr.h sys/vfs.h \
 		 pam/pam_appl.h security/pam_appl.h sys/sysctl.h \
-		 pty.h utmp.h \
+		 pty.h util.h utmp.h \
 		 sys/syslog.h linux/sched.h \
 		 kstat.h paths.h limits.h sys/statfs.h sys/ptrace.h \
-		 float.h sys/statvfs.h
+		 float.h sys/statvfs.h sys/event.h libproc.h mach/mach.h
 		)
 AC_HEADER_SYS_WAIT
 
@@ -191,7 +209,10 @@ dnl checks for library functions.
 dnl
 AC_FUNC_STRERROR_R
 AC_CHECK_FUNCS( \
+   accept4 \
    fdatasync \
+   fexecve \
+   mkostemp \
    hstrerror \
    strerror  \
    mtrace    \
@@ -205,6 +226,13 @@ AC_CHECK_FUNCS( \
    sysctlbyname \
    cfmakeraw \
    setresuid \
+   setresgid \
+   pipe2 \
+   pthread_condattr_setclock \
+   pthread_cond_timedwait_relative_np \
+   timer_create \
+   timer_delete \
+   timer_settime \
    get_current_dir_name \
    faccessat \
    eaccess \
@@ -377,6 +405,8 @@ fi
 savedLIBS="$LIBS"
 LIBS="-lutil $LIBS"
 AC_CHECK_LIB(util, openpty, [UTIL_LIBS="-lutil"], [])
+LIBS="$UTIL_LIBS $savedLIBS"
+AC_CHECK_FUNCS([openpty login_tty])
 AC_SUBST(UTIL_LIBS)
 LIBS="$savedLIBS"
 

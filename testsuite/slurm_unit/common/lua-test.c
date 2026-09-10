@@ -121,12 +121,33 @@ START_TEST(test_load_script)
 }
 END_TEST
 
+#ifdef __APPLE__
+START_TEST(test_qos_without_controller)
+{
+	lua_State *L = _load_lua_script(NULL);
+
+	/* A standalone Lua consumer has no controller accounting globals. */
+	lua_getglobal(L, "slurm");
+	lua_getfield(L, -1, "get_qos_priority");
+	ck_assert_int_eq(lua_type(L, -1), LUA_TFUNCTION);
+	lua_pushstring(L, "normal");
+	ck_assert_int_eq(lua_pcall(L, 1, 1, 0), LUA_OK);
+	ck_assert(lua_isnil(L, -1));
+	_unload_lua_script(L);
+}
+
+END_TEST
+#endif
+
 extern Suite *suite_lua(void)
 {
 	Suite *s = suite_create("lua");
 	TCase *tc_core = tcase_create("lua");
 
 	tcase_add_test(tc_core, test_load_script);
+#ifdef __APPLE__
+	tcase_add_test(tc_core, test_qos_without_controller);
+#endif
 
 	suite_add_tcase(s, tc_core);
 	return s;

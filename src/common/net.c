@@ -61,8 +61,8 @@
 #include "src/common/slurm_protocol_defs.h"
 #include "src/common/xrandom.h"
 
-#if defined(__FreeBSD__) || defined(__NetBSD__)
-#define	SOL_TCP		IPPROTO_TCP
+#ifndef SOL_TCP
+#define SOL_TCP IPPROTO_TCP
 #endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
@@ -79,6 +79,7 @@
 
 #define CON_NAME_PLACE_HOLDER_LEN 25
 
+#include "src/common/fd.h"
 #include "src/common/log.h"
 #include "src/common/macros.h"
 #include "src/common/net.h"
@@ -92,6 +93,25 @@
  * for details.
  */
 strong_alias(net_stream_listen,		slurm_net_stream_listen);
+
+static int _listen_socket(int domain)
+{
+#ifdef __APPLE__
+	int fd = slurm_socket(domain, SOCK_STREAM, IPPROTO_TCP);
+
+	/* slurm_accept() must never wait while excluding a concurrent fork. */
+	if ((fd >= 0) && (fcntl(fd, F_SETFL, O_NONBLOCK) < 0)) {
+		int saved_errno = errno;
+
+		close(fd);
+		errno = saved_errno;
+		return -1;
+	}
+	return fd;
+#else
+	return socket(domain, SOCK_STREAM, IPPROTO_TCP);
+#endif
+}
 
 /* open a stream socket on an ephemeral port and put it into
  * the listen state. fd and port are filled in with the new
@@ -111,7 +131,7 @@ int net_stream_listen(int *fd, uint16_t *port)
 
 	len = sockaddr_fixlen((struct sockaddr *) &sin, len);
 
-	if ((*fd = socket(sin.ss_family, SOCK_STREAM, IPPROTO_TCP)) < 0)
+	if ((*fd = _listen_socket(sin.ss_family)) < 0)
 		return -1;
 
 	if (setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0)
@@ -162,7 +182,7 @@ extern void net_set_keep_alive(int sock)
  * Removing this call might decrease the robustness of communications,
  * but will probably have no noticeable effect.
  */
-#if !defined (__APPLE__) && (! defined(__FreeBSD__) || (__FreeBSD_version > 900000))
+#if defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
 	if (slurm_conf.keepalive_interval != NO_VAL) {
 		opt_int = slurm_conf.keepalive_interval;
 		if (setsockopt(sock, SOL_TCP, TCP_KEEPINTVL,
@@ -180,7 +200,11 @@ extern void net_set_keep_alive(int sock)
 		}
 	}
 	opt_int = slurm_conf.keepalive_time;
+#ifdef __APPLE__
+	if (setsockopt(sock, SOL_TCP, TCP_KEEPALIVE, &opt_int, opt_len) < 0) {
+#else
 	if (setsockopt(sock, SOL_TCP, TCP_KEEPIDLE, &opt_int, opt_len) < 0) {
+#endif
 		error("Unable to set keepalive socket time: %m");
 		return;
 	}
@@ -294,8 +318,7 @@ int net_stream_listen_ports(int *fd, uint16_t *port, uint16_t *ports, bool local
 		if (*fd < 0) {
 			const int one = 1;
 
-			if ((*fd = socket(sin.ss_family, SOCK_STREAM,
-					  IPPROTO_TCP)) < 0) {
+			if ((*fd = _listen_socket(sin.ss_family)) < 0) {
 				log_flag(NET, "%s: socket() failed: %m",
 					 __func__);
 				return -1;
@@ -560,6 +583,26 @@ extern int net_get_peer(int fd, uid_t *cred_uid, gid_t *cred_gid,
 	*cred_uid = cred.uid;
 	*cred_gid = cred.gid;
 	*cred_pid = cred.pid;
+#elif defined(__APPLE__)
+	struct xucred cred = { 0 };
+	pid_t pid;
+	socklen_t len = sizeof(cred);
+
+	if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERCRED, &cred, &len) ||
+	    (len != sizeof(cred)) || (cred.cr_version != XUCRED_VERSION) ||
+	    (cred.cr_ngroups < 1)) {
+		log_flag(NET, "%s: [fd:%d] invalid LOCAL_PEERCRED", __func__, fd);
+		return ESLURM_AUTH_SOCKET_INVALID_PEER;
+	}
+	len = sizeof(pid);
+	if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len) ||
+	    (len != sizeof(pid)) || (pid <= 0)) {
+		log_flag(NET, "%s: [fd:%d] invalid LOCAL_PEERPID", __func__, fd);
+		return ESLURM_AUTH_SOCKET_INVALID_PEER;
+	}
+	*cred_uid = cred.cr_uid;
+	*cred_gid = cred.cr_groups[0];
+	*cred_pid = pid;
 #else
 	struct xucred cred = {
 		.cr_uid = SLURM_AUTH_NOBODY,

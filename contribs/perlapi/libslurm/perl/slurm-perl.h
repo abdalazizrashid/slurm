@@ -8,11 +8,15 @@
 #include <msg.h>
 
 #undef VERSION /* avoid conflicting definition in config.h */
+/* Alias macros must precede the common helper declarations on USE_ALIAS. */
 #include "src/common/slurm_xlator.h"
+
+/* Common helpers use their header names; slurm_xlator selects any aliases. */
+#include "src/common/bitstring.h"
 #include "src/common/job_state_reason.h"
 #include "src/common/list.h"
-#include "src/common/xmalloc.h"
 #include "src/common/slurm_protocol_defs.h"
+#include "src/common/xmalloc.h"
 
 extern void slurm_api_clear_config(void);
 

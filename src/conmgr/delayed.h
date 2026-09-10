@@ -49,6 +49,13 @@ extern void cancel_delayed_work(bool connections_only);
 extern void init_delayed_work(void);
 extern void free_delayed_work(void);
 
+/* Stop timer delivery before restoring the application's signal handlers. */
+extern void stop_delayed_work(void);
+
+/* Suspend native timer threads during quiesce. Caller holds mgr.mutex. */
+extern void pause_delayed_work(void);
+extern void resume_delayed_work(void);
+
 extern void on_signal_alarm(conmgr_callback_args_t conmgr_args, void *arg);
 
 /*

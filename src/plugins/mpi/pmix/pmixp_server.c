@@ -1598,7 +1598,7 @@ static int _slurm_send(pmixp_ep_t *ep, pmixp_base_hdr_t bhdr, buf_t *buf)
  * of the plugin
  */
 
-static pthread_mutex_t _pmixp_pp_lock;
+static pthread_mutex_t _pmixp_pp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #define PMIXP_PP_PWR2_MIN 0
 #define PMIXP_PP_PWR2_MAX 24
@@ -1676,8 +1676,6 @@ void pmixp_server_init_pp(char ***env)
 {
 	char *env_ptr = NULL;
 	int tmp_int;
-
-	slurm_mutex_init(&_pmixp_pp_lock);
 
 	/* check if we want to run ping-pong */
 	if (!(env_ptr = getenvp(*env, PMIXP_PP_ON))) {
@@ -1849,10 +1847,6 @@ int pmixp_server_pp_send(int nodeid, int size)
 	return rc;
 }
 
-
-
-static pthread_mutex_t _pmixp_pp_lock;
-
 #define PMIXP_CPERF_PWR2_MIN 0
 #define PMIXP_CPERF_PWR2_MAX 20
 
@@ -1879,8 +1873,6 @@ void pmixp_server_init_cperf(char ***env)
 {
 	char *env_ptr = NULL;
 	int tmp_int;
-
-	slurm_mutex_init(&_pmixp_pp_lock);
 
 	/* check if we want to run ping-pong */
 	if (!(env_ptr = getenvp(*env, PMIXP_CPERF_ON))) {

@@ -13,6 +13,7 @@
 
 AC_DEFUN([X_AC_PMIX],
 [
+  AC_REQUIRE([AC_PROG_CPP])
   _x_ac_pmix_dirs="/usr /usr/local /usr/lib/x86_64-linux-gnu/pmix /usr/lib/x86_64-linux-gnu/pmix2"
   _x_ac_pmix_libs="lib64 lib"
 

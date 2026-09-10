@@ -34,25 +34,72 @@
 \*****************************************************************************/
 
 #define _GNU_SOURCE
+#include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "src/common/slurm_protocol_api.h"
 #include "src/common/xmalloc.h"
 #include "src/common/xsched.h"
 
+#ifdef __APPLE__
+#define CPU_WORD_BITS (sizeof(unsigned long) * CHAR_BIT)
+
+extern int xcpuset_count(const xcpuset_t *mask)
+{
+	int count = 0;
+
+	for (size_t i = 0; i < mask->size / sizeof(unsigned long); i++)
+		count += __builtin_popcountl(mask->mask[i]);
+	return count;
+}
+
+extern void xcpuset_zero(xcpuset_t *mask)
+{
+	memset(mask->mask, 0, mask->size);
+}
+
+extern void xcpuset_set(size_t cpu, xcpuset_t *mask)
+{
+	if (cpu < mask->max_cpus)
+		mask->mask[cpu / CPU_WORD_BITS] |= 1UL << (cpu % CPU_WORD_BITS);
+}
+
+extern void xcpuset_clr(size_t cpu, xcpuset_t *mask)
+{
+	if (cpu < mask->max_cpus)
+		mask->mask[cpu / CPU_WORD_BITS] &=
+			~(1UL << (cpu % CPU_WORD_BITS));
+}
+
+extern int xcpuset_isset(size_t cpu, const xcpuset_t *mask)
+{
+	return ((cpu < mask->max_cpus) && (mask->mask[cpu / CPU_WORD_BITS] &
+					   (1UL << (cpu % CPU_WORD_BITS))));
+}
+#endif
+
 extern xcpuset_t *xcpuset_alloc(void)
 {
+#ifdef __APPLE__
+	long cpus = sysconf(_SC_NPROCESSORS_CONF);
+	size_t max_cpus = (cpus > 1024) ? cpus : 1024;
+	size_t words = (max_cpus + CPU_WORD_BITS - 1) / CPU_WORD_BITS;
+	xcpuset_t *new = xmalloc(sizeof(*new) + words * sizeof(unsigned long));
+
+	new->max_cpus = words *CPU_WORD_BITS;
+	new->size = words * sizeof(unsigned long);
+#else
 	xcpuset_t *new = xgetaffinity(0);
+#endif
 	XCPU_ZERO(new);
 	return new;
 }
 
 extern char *task_cpuset_to_str(const xcpuset_t *mask)
 {
-#if defined(__APPLE__)
-	fatal("%s: not supported on macOS", __func__);
-#else
 	int base;
 	bool leading_zeros = true;
 	char *str = xmalloc((mask->max_cpus / 4) + 1);
@@ -79,37 +126,38 @@ extern char *task_cpuset_to_str(const xcpuset_t *mask)
 	if (leading_zeros)
 		*ptr++ = '0';
 	return str;
-#endif
 }
 
 extern xcpuset_t *task_str_to_cpuset(const char *str)
 {
-#if defined(__APPLE__)
-	fatal("%s: not supported on macOS", __func__);
-#else
 	xcpuset_t *mask = NULL;
-	int len = strlen(str);
-	const char *ptr = str + len - 1;
-	int base = 0;
+	size_t len;
+	size_t base = 0;
+
+	if (!str || !str[0])
+		return NULL;
+	len = strlen(str);
 
 	/* skip 0x, it's all hex anyway */
 	if ((len > 1) && !memcmp(str, "0x", 2L)) {
 		str += 2;
 		len -= 2;
 	}
+	if (!len)
+		return NULL;
 
 	mask = xcpuset_alloc();
 
 	/* Check that hex chars will fit into the xcpuset_t */
-	if ((len * 4) > mask->max_cpus) {
-		error("%s: Hex string is too large to convert to cpu_set_t (length %d, max_cpus %zu)",
+	if (len > (mask->max_cpus / 4)) {
+		error("%s: Hex string is too large to convert to CPU mask (length %zu, max_cpus %zu)",
 		      __func__, len, mask->max_cpus);
 		xfree(mask);
 		return NULL;
 	}
 
-	while (ptr >= str) {
-		char val = slurm_char_to_hex(*ptr);
+	for (size_t i = len; i > 0; i--) {
+		char val = slurm_char_to_hex(str[i - 1]);
 		if (val == (char) -1) {
 			xfree(mask);
 			break;
@@ -122,33 +170,38 @@ extern xcpuset_t *task_str_to_cpuset(const char *str)
 			XCPU_SET(base + 2, mask);
 		if (val & 8)
 			XCPU_SET(base + 3, mask);
-		ptr--;
 		base += 4;
 	}
 
 	return mask;
-#endif
 }
 
 extern int xsetaffinity(pid_t pid, xcpuset_t *mask)
 {
 	int rval;
 
-#ifdef __FreeBSD__
+#if defined(__APPLE__)
+	/* THREAD_AFFINITY_POLICY is a cache-sharing hint, not CPU binding. */
+	errno = ENOTSUP;
+	rval = -1;
+#elif defined(__FreeBSD__)
 	rval = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, pid,
 				  mask->size, &mask->mask);
 #else
 	rval = sched_setaffinity(pid, mask->size, &mask->mask);
 #endif
 	if (rval) {
+		int save_errno = errno;
 		char *mstr = task_cpuset_to_str(mask);
 		verbose("sched_setaffinity(%d,%zu,0x%s) failed: %m",
 			pid, mask->size, mstr);
 		xfree(mstr);
+		errno = save_errno;
 	}
 	return rval;
 }
 
+#ifndef __APPLE__
 static int _getaffinity(pid_t pid, xcpuset_t *mask)
 {
 	errno = 0;
@@ -167,9 +220,14 @@ static int _getaffinity(pid_t pid, xcpuset_t *mask)
 	return sched_getaffinity(pid, mask->size, &mask->mask);
 #endif
 }
+#endif
 
 extern xcpuset_t *xgetaffinity(pid_t pid)
 {
+#ifdef __APPLE__
+	errno = ENOTSUP;
+	return NULL;
+#else
 	int rval;
 	static size_t max_cpus = CPU_SETSIZE;
 	xcpuset_t *mask = NULL;
@@ -199,10 +257,16 @@ extern xcpuset_t *xgetaffinity(pid_t pid)
 	}
 
 	return mask;
+#endif
 }
 
 extern int get_assigned_cpu_count(void)
 {
+#ifdef __APPLE__
+	long count = sysconf(_SC_NPROCESSORS_ONLN);
+
+	return ((count > 0) && (count <= INT_MAX)) ? count : 0;
+#else
 	int count = -1;
 	xcpuset_t *mask = xgetaffinity(0);
 
@@ -210,4 +274,5 @@ extern int get_assigned_cpu_count(void)
 
 	xfree(mask);
 	return count;
+#endif
 }

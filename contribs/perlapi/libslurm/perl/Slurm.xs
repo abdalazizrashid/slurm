@@ -114,19 +114,19 @@ slurm_strerror(slurm_t self, int errnum=0)
 # These functions are made object method instead of class method.
 
 const char *
-slurm_preempt_mode_string(slurm_t self, uint16_t preempt_mode);
+preempt_mode_string(slurm_t self, uint16_t preempt_mode);
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = slurm_preempt_mode_string(preempt_mode);
+		RETVAL = preempt_mode_string(preempt_mode);
 	OUTPUT:
 		RETVAL
 
 uint16_t
-slurm_preempt_mode_num(slurm_t self, char *preempt_mode)
+preempt_mode_num(slurm_t self, char *preempt_mode)
 	C_ARGS:
 		preempt_mode
 	INIT:
@@ -144,36 +144,36 @@ slurm_job_reason_string(slurm_t self, uint32_t inx)
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = (char *)slurm_job_state_reason_string(inx);
+		RETVAL = (char *)job_state_reason_string(inx);
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_job_state_string(slurm_t self, uint32_t inx)
+job_state_string(slurm_t self, uint32_t inx)
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = slurm_job_state_string(inx);
+		RETVAL = job_state_string(inx);
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_job_state_string_compact(slurm_t self, uint32_t inx)
+job_state_string_compact(slurm_t self, uint32_t inx)
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = slurm_job_state_string_compact(inx);
+		RETVAL = job_state_string_compact(inx);
 	OUTPUT:
 		RETVAL
 
 int
-slurm_job_state_num(slurm_t self, char *state_name)
+job_state_num(slurm_t self, char *state_name)
 	C_ARGS:
 		state_name
 	INIT:
@@ -184,7 +184,7 @@ slurm_job_state_num(slurm_t self, char *state_name)
 			    */
 
 char_xfree *
-slurm_reservation_flags_string(slurm_t self, HV *resv_hv)
+reservation_flags_string(slurm_t self, HV *resv_hv)
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
@@ -196,36 +196,36 @@ slurm_reservation_flags_string(slurm_t self, HV *resv_hv)
 			XSRETURN_UNDEF;
 		}
 
-		RETVAL = slurm_reservation_flags_string(&resv);
+		RETVAL = reservation_flags_string(&resv);
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_node_state_string(slurm_t self, uint32_t inx)
+node_state_string(slurm_t self, uint32_t inx)
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = slurm_node_state_string(inx);
+		RETVAL = node_state_string(inx);
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_node_state_string_compact(slurm_t self, uint32_t inx)
+node_state_string_compact(slurm_t self, uint32_t inx)
 	CODE:
 		if (self); /* this is needed to avoid a warning about
 			      unused variables.  But if we take slurm_t self
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		RETVAL = slurm_node_state_string_compact(inx);
+		RETVAL = node_state_string_compact(inx);
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_private_data_string(slurm_t self, uint16_t private_data)
+private_data_string(slurm_t self, uint16_t private_data)
 	PREINIT:
 		char tmp_str[128];
 	CODE:
@@ -234,13 +234,13 @@ slurm_private_data_string(slurm_t self, uint16_t private_data)
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		slurm_private_data_string(private_data, tmp_str, sizeof(tmp_str));
+		private_data_string(private_data, tmp_str, sizeof(tmp_str));
 		RETVAL = tmp_str;
 	OUTPUT:
 		RETVAL
 
 char *
-slurm_accounting_enforce_string(slurm_t self, uint16_t enforce)
+accounting_enforce_string(slurm_t self, uint16_t enforce)
 	PREINIT:
 		char tmp_str[128];
 	CODE:
@@ -249,7 +249,7 @@ slurm_accounting_enforce_string(slurm_t self, uint16_t enforce)
 			      out of the mix Slurm-> doesn't work,
 			      only Slurm::
 			    */
-		slurm_accounting_enforce_string(enforce, tmp_str, sizeof(tmp_str));
+		accounting_enforce_string(enforce, tmp_str, sizeof(tmp_str));
 		RETVAL = tmp_str;
 	OUTPUT:
 		RETVAL
@@ -1511,98 +1511,98 @@ slurm_list_iterator_DESTROY(list_itr_t *i)
 ######################################################################
 #	BITSTRING FUNCTIONS
 ######################################################################
-MODULE = Slurm		PACKAGE = Slurm::Bitstr	PREFIX=slurm_bit_
+MODULE = Slurm		PACKAGE = Slurm::Bitstr	PREFIX=bit_
 #
 # $bitmap = Slurm::Bitstr::alloc($nbits);
 bitstr_t *
-slurm_bit_alloc(bitoff_t nbits)
+bit_alloc(bitoff_t nbits)
 	POSTCALL:
 		if(RETVAL == NULL) {
 			XSRETURN_UNDEF;
 		}
 
 bitstr_t *
-slurm_bit_copy(bitstr_t *b)
+bit_copy(bitstr_t *b)
 	POSTCALL:
 		if(RETVAL == NULL) {
 			XSRETURN_UNDEF;
 		}
 
 int
-slurm_bit_test(bitstr_t *b, bitoff_t bit)
+bit_test(bitstr_t *b, bitoff_t bit)
 
 void
-slurm_bit_set(bitstr_t *b, bitoff_t bit)
+bit_set(bitstr_t *b, bitoff_t bit)
 
 void
-slurm_bit_clear(bitstr_t *b, bitoff_t bit)
+bit_clear(bitstr_t *b, bitoff_t bit)
 
 void
-slurm_bit_nset(bitstr_t *b, bitoff_t start, bitoff_t stop)
+bit_nset(bitstr_t *b, bitoff_t start, bitoff_t stop)
 
 void
-slurm_bit_nclear(bitstr_t *b, bitoff_t start, bitoff_t stop)
+bit_nclear(bitstr_t *b, bitoff_t start, bitoff_t stop)
 
 bitoff_t
-slurm_bit_ffc(bitstr_t *b)
+bit_ffc(bitstr_t *b)
 
 bitoff_t
-slurm_bit_ffs(bitstr_t *b)
+bit_ffs(bitstr_t *b)
 
 bitoff_t
-slurm_bit_fls(bitstr_t *b)
+bit_fls(bitstr_t *b)
 
 bitoff_t
-slurm_bit_size(bitstr_t *b)
+bit_size(bitstr_t *b)
 
 void
-slurm_bit_and(bitstr_t *b1, bitstr_t *b2)
+bit_and(bitstr_t *b1, bitstr_t *b2)
 
 void
-slurm_bit_not(bitstr_t *b)
+bit_not(bitstr_t *b)
 
 void
-slurm_bit_or(bitstr_t *b1, bitstr_t *b2)
+bit_or(bitstr_t *b1, bitstr_t *b2)
 
 void
-slurm_bit_copybits(bitstr_t *b1, bitstr_t *b2)
+bit_copybits(bitstr_t *b1, bitstr_t *b2)
 
 int
-slurm_bit_set_count(bitstr_t *b)
+bit_set_count(bitstr_t *b)
 
 int
-slurm_bit_set_count_range(bitstr_t *b, int start, int end)
+bit_set_count_range(bitstr_t *b, int start, int end)
 
 int
-slurm_bit_clear_count(bitstr_t *b)
+bit_clear_count(bitstr_t *b)
 
 bitstr_t *
-slurm_bit_rotate_copy(bitstr_t *b, int n, bitoff_t nbits)
+bit_rotate_copy(bitstr_t *b, int n, bitoff_t nbits)
 	POSTCALL:
 		if(RETVAL == NULL) {
 			XSRETURN_UNDEF;
 		}
 
 void
-slurm_bit_rotate(bitstr_t *b, int n)
+bit_rotate(bitstr_t *b, int n)
 
 
 # $str = $bitmap->fmt();
 char *
-slurm_bit_fmt(bitstr_t *b)
+bit_fmt(bitstr_t *b)
 	PREINIT:
 		int len = 1, bits;
 		char *tmp_str;
 	CODE:
-		bits = slurm_bit_size(b);
+		bits = bit_size(b);
 		while(bits > 0) {
 			bits /= 10;
 			len ++;
 		}
-		bits = slurm_bit_size(b);
+		bits = bit_size(b);
 		len *= bits;
 		New(0, tmp_str, len, char);
-		slurm_bit_fmt(tmp_str, len, b);
+		bit_fmt(tmp_str, len, b);
 		len = strlen(tmp_str) + 1;
 		New(0, RETVAL, len, char);
 		Copy(tmp_str, RETVAL, len, char);
@@ -1611,16 +1611,16 @@ slurm_bit_fmt(bitstr_t *b)
 		RETVAL
 
 int
-slurm_bit_unfmt(bitstr_t *b, char *str)
+bit_unfmt(bitstr_t *b, char *str)
 
 
 # $array = Slurm::Bitstr::fmt2int($str);
 AV *
-slurm_bit_fmt2int(char *str)
+bit_fmt2int(char *str)
 	PREINIT:
 		int i = 0, *array;
 	CODE:
-		array = slurm_bitfmt2int(str);
+		array = bitfmt2int(str);
 		RETVAL = newAV();
 		while (array[i] != -1) {
 			av_store_int(RETVAL, i, array[i]);
@@ -1632,12 +1632,12 @@ slurm_bit_fmt2int(char *str)
 
 
 char *
-slurm_bit_fmt_hexmask(bitstr_t *b)
+bit_fmt_hexmask(bitstr_t *b)
 	PREINIT:
 		char *tmp_str;
 		int len;
 	CODE:
-		tmp_str = slurm_bit_fmt_hexmask(b);
+		tmp_str = bit_fmt_hexmask(b);
 		len = strlen(tmp_str) + 1;
 		New(0, RETVAL, len, char);
 		Copy(tmp_str, RETVAL, len, char);
@@ -1649,31 +1649,31 @@ slurm_bit_fmt_hexmask(bitstr_t *b)
 #      bits set originally in "b" stay set after unfmt.
 #      maybe this is a bug
 int
-slurm_bit_unfmt_hexmask(bitstr_t *b, char *str)
+bit_unfmt_hexmask(bitstr_t *b, char *str)
 
 void
-slurm_bit_fill_gaps(bitstr_t *b)
+bit_fill_gaps(bitstr_t *b)
 
 int
-slurm_bit_super_set(bitstr_t *b1, bitstr_t *b2)
+bit_super_set(bitstr_t *b1, bitstr_t *b2)
 
 int
-slurm_bit_overlap(bitstr_t *b1, bitstr_t *b2)
+bit_overlap(bitstr_t *b1, bitstr_t *b2)
 
 int
-slurm_bit_equal(bitstr_t *b1, bitstr_t *b2)
+bit_equal(bitstr_t *b1, bitstr_t *b2)
 
 bitstr_t *
-slurm_bit_pick_cnt(bitstr_t *b, bitoff_t nbits)
+bit_pick_cnt(bitstr_t *b, bitoff_t nbits)
 	POSTCALL:
 		if(RETVAL == NULL) {
 			XSRETURN_UNDEF;
 		}
 
 bitoff_t
-slurm_bit_get_bit_num(bitstr_t *b, int pos)
+bit_get_bit_num(bitstr_t *b, int pos)
 
 void
-slurm_bit_DESTROY(bitstr_t *b)
+bit_DESTROY(bitstr_t *b)
 	CODE:
 		FREE_NULL_BITMAP(b);

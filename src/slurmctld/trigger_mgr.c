@@ -1386,8 +1386,8 @@ static void _trigger_run_program(trig_mgr_info_t *trig_in)
 			error("trigger: setgid: %m");
 			exit(1);
 		}
-		if ((setresuid(uid, uid, -1) == -1) && !run_as_self) {
-			error("trigger: setresuid: %m");
+		if ((setuid_real_effective(uid) == -1) && !run_as_self) {
+			error("trigger: setuid_real_effective: %m");
 			exit(1);
 		}
 		execv(program, args);

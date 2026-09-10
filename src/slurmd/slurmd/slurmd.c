@@ -2417,15 +2417,15 @@ static bool _slurm_conf_file_exists(void)
  */
 static void _handle_slash_run(void)
 {
-	if (_set_slurmd_spooldir("/run/slurm") < 0) {
-		error("Unable to create /run/slurm dir");
+	if (_set_slurmd_spooldir(SLURM_RUN_DIR "/slurm") < 0) {
+		error("Unable to create " SLURM_RUN_DIR "/slurm dir");
 		return;
 	}
 
-	(void) unlink("/run/slurm/conf");
+	(void) unlink(SLURM_RUN_DIR "/slurm/conf");
 
-	if (symlink(conf->conf_cache, "/run/slurm/conf"))
-		error("Unable to create /run/slurm/conf symlink: %m");
+	if (symlink(conf->conf_cache, SLURM_RUN_DIR "/slurm/conf"))
+		error("Unable to create " SLURM_RUN_DIR "/slurm/conf symlink: %m");
 }
 
 /*
@@ -2944,7 +2944,8 @@ _slurmd_init(void)
 	 */
 
 	/* Apply the configured CpuSpecList and MemSpecLimit */
-	_resource_spec_init();
+	if (_resource_spec_init() != SLURM_SUCCESS)
+		return SLURM_ERROR;
 
 	_print_conf();
 
@@ -3084,7 +3085,7 @@ static int _set_slurmd_spooldir(const char *dir)
 
 	if (mkdir(dir, 0755) < 0) {
 		if (errno != EEXIST) {
-			fatal("mkdir(%s): %m", conf->spooldir);
+			error("mkdir(%s): %m", dir);
 			return SLURM_ERROR;
 		}
 	}
@@ -3093,7 +3094,7 @@ static int _set_slurmd_spooldir(const char *dir)
 	 * Ensure spool directory permissions are correct.
 	 */
 	if (chmod(dir, 0755) < 0) {
-		error("chmod(%s, 0755): %m", conf->spooldir);
+		error("chmod(%s, 0755): %m", dir);
 		return SLURM_ERROR;
 	}
 
@@ -3217,8 +3218,12 @@ static int _set_topo_info(void)
 static int _resource_spec_init(void)
 {
 	fini_system_cgroup();	/* Prevent memory leak */
-	if (_core_spec_init() != SLURM_SUCCESS)
+	if (_core_spec_init() != SLURM_SUCCESS) {
 		error("Resource spec: core specialization disabled");
+#ifdef __APPLE__
+		return SLURM_ERROR;
+#endif
+	}
 	if (_memory_spec_init() != SLURM_SUCCESS)
 		error("Resource spec: system cgroup memory limit disabled");
 	return SLURM_SUCCESS;
@@ -3230,7 +3235,11 @@ static int _resource_spec_init(void)
 static int _core_spec_init(void)
 {
 #if defined(__APPLE__)
-	error("%s: not supported on macOS", __func__);
+	if (conf->core_spec_cnt || conf->cpu_spec_list) {
+		error("CoreSpecCount and CpuSpecList require CPU affinity, which is unavailable on macOS");
+		errno = ENOTSUP;
+		return SLURM_ERROR;
+	}
 	return SLURM_SUCCESS;
 #else
 	int i, rval;

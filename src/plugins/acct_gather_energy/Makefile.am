@@ -1,3 +1,7 @@
 # Makefile for accounting gather energy plugins
 
-SUBDIRS = gpu ibmaem ipmi pm_counters rapl xcc
+SUBDIRS = gpu ipmi xcc
+
+if LINUX_BUILD
+SUBDIRS += ibmaem pm_counters rapl
+endif

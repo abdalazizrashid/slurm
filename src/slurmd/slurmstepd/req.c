@@ -102,7 +102,9 @@
 
 static void *_handle_accept(void *arg);
 static int _handle_request(int fd, uid_t uid, pid_t remote_pid);
+#ifndef __APPLE__
 static void *_wait_extern_pid(void *args);
+#endif
 static int _handle_add_extern_pid_internal(pid_t pid);
 static bool _msg_socket_readable(eio_obj_t *obj);
 static int _msg_socket_accept(eio_obj_t *obj, list_t *objs);
@@ -163,7 +165,7 @@ _create_socket(const char *name)
 	}
 
 	/* create a unix domain stream socket */
-	if ((fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)) < 0)
+	if ((fd = slurm_socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
 
 	memset(&addr, 0, sizeof(addr));
@@ -375,8 +377,8 @@ static int _msg_socket_accept(eio_obj_t *obj, list_t *objs)
 
 	debug3("Called _msg_socket_accept");
 
-	while ((fd = accept4(obj->fd, (struct sockaddr *) &addr, &len,
-			     SOCK_CLOEXEC)) < 0) {
+	while ((fd = slurm_accept(obj->fd, (struct sockaddr *) &addr, &len,
+				  false)) < 0) {
 		if (errno == EINTR)
 			continue;
 		if ((errno == EAGAIN) ||
@@ -1646,12 +1648,22 @@ rwfail:
 	return SLURM_ERROR;
 }
 
-static void _block_on_pid(pid_t pid)
+#ifndef __APPLE__
+typedef struct {
+	pid_t pid;
+} extern_pid_info_t;
+
+static bool _extern_pid_alive(const extern_pid_info_t *info)
+{
+	return kill(info->pid, 0) != -1;
+}
+
+static void _block_on_pid(const extern_pid_info_t *info)
 {
 	struct timespec ts = { 0, 0 };
 
 	slurm_mutex_lock(&extern_thread_lock);
-	while (kill(pid, 0) != -1) {
+	while (_extern_pid_alive(info)) {
 		if (step->state >= SLURMSTEPD_STEP_CANCELLED)
 			break;
 		clock_gettime(CLOCK_REALTIME, &ts);
@@ -1668,7 +1680,8 @@ static void _block_on_pid(pid_t pid)
  */
 static void *_wait_extern_pid(void *args)
 {
-	pid_t pid = *(pid_t *) args;
+	extern_pid_info_t info = *(extern_pid_info_t *) args;
+	pid_t pid = info.pid;
 	jobacctinfo_t *jobacct = NULL;
 	pid_t *pids = NULL;
 	int npids = 0, i;
@@ -1681,7 +1694,7 @@ static void *_wait_extern_pid(void *args)
 	xfree(args);
 
 	//info("waiting on pid %d", pid);
-	_block_on_pid(pid);
+	_block_on_pid(&info);
 	//info("done with pid %d %d: %m", pid, rc);
 	jobacct = jobacct_gather_remove_task(pid);
 	if (jobacct) {
@@ -1745,7 +1758,7 @@ end:
 	return NULL;
 }
 
-static void _wait_extern_thr_create(pid_t *extern_pid)
+static void _wait_extern_thr_create(extern_pid_info_t *extern_pid)
 {
 	/* Lock as several RPC can write to the same variable. */
 	slurm_mutex_lock(&extern_thread_lock);
@@ -1755,11 +1768,23 @@ static void _wait_extern_thr_create(pid_t *extern_pid)
 			    _wait_extern_pid, extern_pid);
 	slurm_mutex_unlock(&extern_thread_lock);
 }
+#endif
 
 static int _handle_add_extern_pid_internal(pid_t pid)
 {
-	pid_t *extern_pid;
-	jobacct_id_t jobacct_id;
+#ifdef __APPLE__
+	/*
+	 * Adoption supplies only a PID. Native tracking and accounting cannot
+	 * register that PID atomically against one process birth identity, so a
+	 * recycled PID could otherwise enroll an unrelated process for cleanup.
+	 * Reject before changing either plugin's membership.
+	 */
+	error("Adopting external pid %d is not supported on macOS", pid);
+	errno = ENOTSUP;
+	return SLURM_ERROR;
+#else
+	extern_pid_info_t *extern_pid;
+	jobacct_id_t jobacct_id = { 0 };
 
 	if (step->step_id.step_id != SLURM_EXTERN_CONT) {
 		error("%s: non-extern step (%ps) given for %pI",
@@ -1768,9 +1793,6 @@ static int _handle_add_extern_pid_internal(pid_t pid)
 	}
 
 	debug("%s: for %ps, pid %d", __func__, &step->step_id, pid);
-
-	extern_pid = xmalloc(sizeof(*extern_pid));
-	*extern_pid = pid;
 
 	/* track pid: add outside of the below thread so that the pam module
 	 * waits until the parent pid is added, before letting the parent spawn
@@ -1801,9 +1823,12 @@ static int _handle_add_extern_pid_internal(pid_t pid)
 		set_user_limits(pid);
 
 	/* spawn a thread that will wait on the pid given */
+	extern_pid = xmalloc(sizeof(*extern_pid));
+	extern_pid->pid = pid;
 	_wait_extern_thr_create(extern_pid);
 
 	return SLURM_SUCCESS;
+#endif
 }
 
 static int _handle_add_extern_pid(int fd, uid_t uid, pid_t remote_pid)
@@ -2567,13 +2592,11 @@ static int _handle_list_pids(int fd, uid_t uid, pid_t remote_pid)
 		pid = (uint32_t)pids[i];
 		safe_write(fd, &pid, sizeof(uint32_t));
 	}
-	if (npids > 0)
-		xfree(pids);
+	xfree(pids);
 
 	return SLURM_SUCCESS;
 rwfail:
-	if (npids > 0)
-		xfree(pids);
+	xfree(pids);
 	return SLURM_ERROR;
 }
 

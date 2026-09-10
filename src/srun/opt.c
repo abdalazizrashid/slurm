@@ -1344,7 +1344,7 @@ static bool _opt_verify(void)
 		opt.job_name = xstrdup(sropt.cmd_name);
 
 	if (sropt.pty) {
-#ifdef HAVE_PTY_H
+#if defined(HAVE_OPENPTY) && defined(HAVE_LOGIN_TTY)
 		sropt.unbuffered = true;	/* implicit */
 		if (opt.efname ||opt.ifname || opt.ofname) {
 			error("--error/--input/--output are incompatible with --pty");
@@ -1641,7 +1641,7 @@ static void _help(void)
 "                              value is all or none or any combination of\n"
 "                              energy, lustre, network or task\n"
 "      --propagate[=rlimits]   propagate all [or specific list of] rlimits\n"
-#ifdef HAVE_PTY_H
+#if defined(HAVE_OPENPTY) && defined(HAVE_LOGIN_TTY)
 "      --pty[=fd]              run task zero in pseudo terminal [or in requested terminal given by fd]\n"
 #endif
 "      --quit-on-interrupt     quit on single Ctrl-C\n"

@@ -64,7 +64,7 @@
 #include "src/interfaces/conn.h"
 #include "src/interfaces/hash.h"
 
-#define DEFAULT_RUN_DIR "/run/slurm"
+#define DEFAULT_RUN_DIR SLURM_RUN_DIR "/slurm"
 
 decl_static_data(usage_txt);
 

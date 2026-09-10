@@ -70,8 +70,8 @@ static int _job_resrcs_to_hv(job_info_t *job_info, HV *hv)
 	hostlist_t *hl, *hl_last;
 	uint32_t threads, cpu_cnt;
 
-	if (!job_resrcs || !job_resrcs->core_bitmap
-	    || ((last = slurm_bit_fls(job_resrcs->core_bitmap)) == -1))
+	if (!job_resrcs || !job_resrcs->core_bitmap ||
+	    ((last = bit_fls(job_resrcs->core_bitmap)) == -1))
 		return 0;
 
 	if (!(hl = slurm_hostlist_create(job_resrcs->nodes)))
@@ -100,17 +100,16 @@ static int _job_resrcs_to_hv(job_info_t *job_info, HV *hv)
 			job_resrcs->cores_per_socket[sock_inx];
 		host = slurm_hostlist_shift(hl);
 		threads = _threads_per_core(host);
-		cpu_bitmap = slurm_bit_alloc(bit_reps * threads);
+		cpu_bitmap = bit_alloc(bit_reps * threads);
 		for (j = 0; j < bit_reps; j++) {
 			if (slurm_bit_test(job_resrcs->core_bitmap, bit_inx)){
 				for (k = 0; k < threads; k++)
-					slurm_bit_set(cpu_bitmap,
-						      (j * threads) + k);
+					bit_set(cpu_bitmap, (j * threads) + k);
 			}
 			bit_inx++;
 		}
 		cpu_cnt = job_resrcs->cpus ? job_resrcs->cpus[rel_node_inx] : 0;
-		slurm_bit_fmt(tmp1, sizeof(tmp1), cpu_bitmap);
+		bit_fmt(tmp1, sizeof(tmp1), cpu_bitmap);
 		FREE_NULL_BITMAP(cpu_bitmap);
 /*
  *		If the allocation values for this host are not the same as the

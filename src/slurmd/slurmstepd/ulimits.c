@@ -126,12 +126,22 @@ extern void set_user_limits(pid_t pid)
 	slurm_rlimits_info_t *rli;
 	struct rlimit r;
 	rlim_t task_mem_bytes;
+#ifdef __APPLE__
+	rlim_t task_vsize_bytes;
+	__uint128_t requested_vsize;
+#endif
 	int rlimit_rc;
 
 	if (_prlimit(pid, RLIMIT_CPU, NULL, &r) == 0) {
 		if (r.rlim_max != RLIM_INFINITY) {
+#ifdef __APPLE__
+			/* task/darwin installs its policy before user propagation. */
+			debug("Task CPU time ceiling is %"PRIu64" seconds",
+			      (uint64_t) r.rlim_max);
+#else
 			error("Slurm process CPU time limit is %d seconds",
 			      (int) r.rlim_max);
+#endif
 		}
 	}
 
@@ -149,7 +159,8 @@ extern void set_user_limits(pid_t pid)
 	 * caveat that the real RSS limit is over all job tasks on the
 	 * node and not per process, but hopefully this is better than
 	 * nothing).  */
-#ifdef RLIMIT_RSS
+/* Darwin's RLIMIT_RSS aliases RLIMIT_AS. Physical MB cannot cap VM space. */
+#if defined(RLIMIT_RSS) && !defined(__APPLE__)
 	rlimit_rc = _prlimit(pid, RLIMIT_RSS, NULL, &r);
 	if ((task_mem_bytes) && !rlimit_rc && (r.rlim_max > task_mem_bytes)) {
 		r.rlim_max =  r.rlim_cur = task_mem_bytes;
@@ -161,23 +172,36 @@ extern void set_user_limits(pid_t pid)
 			debug2("Set task rss(%"PRIu64" MB)", step->step_mem);
 		if (get_log_level() >= LOG_LEVEL_DEBUG2) {
 			_prlimit(pid, RLIMIT_RSS, NULL, &r);
-			debug2("Task RSS limits from _prlimit: rlim_cur:%lu rlim_max:%lu",
-			       r.rlim_cur, r.rlim_max);
+			debug2("Task RSS limits from _prlimit: rlim_cur:%"PRIu64" rlim_max:%"PRIu64,
+			       (uint64_t) r.rlim_cur, (uint64_t) r.rlim_max);
 		}
 	} else if (rlimit_rc) {
 		error("_prlimit(RLIMIT_RSS,..) failed with %m");
 	} else {
-		debug2("Not setting task rss rlimit, task bytes: %lu, rlimit_max: %lu",
-		       task_mem_bytes, r.rlim_max);
+		debug2("Not setting task rss rlimit, task bytes: %"PRIu64", rlimit_max: %"PRIu64,
+		       (uint64_t) task_mem_bytes, (uint64_t) r.rlim_max);
 	}
 #endif
 
 #ifdef SLURM_RLIMIT_VSIZE
 	rlimit_rc = _prlimit(pid, SLURM_RLIMIT_VSIZE, NULL, &r);
+#ifdef __APPLE__
+	/* Compare the scaled target before changing an existing policy ceiling. */
+	requested_vsize =
+		(__uint128_t) task_mem_bytes * slurm_conf.vsize_factor / 100;
+	task_vsize_bytes = (requested_vsize >= RLIM_INFINITY) ?
+				   RLIM_INFINITY :
+				   (rlim_t) requested_vsize;
+	if (task_mem_bytes && slurm_conf.vsize_factor && !rlimit_rc &&
+	    (r.rlim_max > task_vsize_bytes)) {
+		r.rlim_max = task_vsize_bytes;
+		r.rlim_cur = MIN(r.rlim_cur, r.rlim_max);
+#else
 	if ((task_mem_bytes) && slurm_conf.vsize_factor && !rlimit_rc &&
 	    (r.rlim_max > task_mem_bytes)) {
 		r.rlim_max = task_mem_bytes * (slurm_conf.vsize_factor / 100.0);
 		r.rlim_cur = r.rlim_max;
+#endif
 		if (_prlimit(pid, SLURM_RLIMIT_VSIZE, &r, NULL)) {
 			/* Indicates that limit has already been exceeded */
 			fatal("_prlimit(%s, %"PRIu64" MB): %m",
@@ -186,14 +210,14 @@ extern void set_user_limits(pid_t pid)
 			debug2("Set task vsize(%"PRIu64" MB)", step->step_mem);
 		if (get_log_level() >= LOG_LEVEL_DEBUG2) {
 			_prlimit(pid, SLURM_RLIMIT_VSIZE, NULL, &r);
-			debug2("task VSIZE limits: rlim_cur:%lu rlim_max:%lu",
-			       r.rlim_cur, r.rlim_max);
+			debug2("task VSIZE limits: rlim_cur:%"PRIu64" rlim_max:%"PRIu64,
+			       (uint64_t) r.rlim_cur, (uint64_t) r.rlim_max);
 		}
 	} else if (rlimit_rc) {
 		error("_prlimit(SLURM_RLIMIT_VSIZE,,..) failed with %m");
 	} else {
-		debug2("Not setting task vsize rlimit, task bytes: %lu, rlimit_max: %lu",
-		       task_mem_bytes, r.rlim_max);
+		debug2("Not setting task vsize rlimit, task bytes: %"PRIu64", rlimit_max: %"PRIu64,
+		       (uint64_t) task_mem_bytes, (uint64_t) r.rlim_max);
 	}
 #endif
 }

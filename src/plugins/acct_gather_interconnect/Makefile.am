@@ -1,3 +1,7 @@
 # Makefile for accounting gather interconnect plugins
 
-SUBDIRS = ofed sysfs
+SUBDIRS = ofed
+
+if LINUX_BUILD
+SUBDIRS += sysfs
+endif

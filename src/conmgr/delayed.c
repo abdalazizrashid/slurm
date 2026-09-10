@@ -35,6 +35,11 @@
 
 #include <stdlib.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <fcntl.h>
+#include <sys/event.h>
+#include <unistd.h>
+#endif
 
 #include "src/common/macros.h"
 #include "src/common/read_config.h"
@@ -45,6 +50,7 @@
 #include "src/conmgr/conmgr.h"
 #include "src/conmgr/delayed.h"
 #include "src/conmgr/mgr.h"
+#include "src/conmgr/signals.h"
 
 #define CTIME_STR_LEN 72
 
@@ -52,7 +58,6 @@ typedef struct {
 #define MAGIC_FOREACH_DELAYED_WORK 0xB233443A
 	int magic; /* MAGIC_FOREACH_DELAYED_WORK */
 	work_t *shortest;
-	timespec_t time;
 } foreach_delayed_work_t;
 
 #define MAGIC_FOREACH_CANCEL_WORK 0xA238483A
@@ -62,14 +67,46 @@ typedef struct {
 	bool connections_only;
 } foreach_cancel_work_t;
 
+/* Timer state is independent of mgr.mutex: shutdown joins the timer thread. */
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool timer_initialized;
+#ifdef __APPLE__
+static int timer_fd = -1;
+static pthread_t timer_thread;
+static pthread_once_t timer_once = PTHREAD_ONCE_INIT;
+static int timer_init_error;
+static bool timer_running, timer_armed, timer_stop;
+
+#else
 /* timer to trigger SIGALRM */
 static timer_t timer = {0};
-/* Mutex to protect timer */
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 static int _inspect_work(void *x, void *key);
-static void _update_timer(work_t *shortest, const timespec_t time);
+static void _update_timer(work_t *shortest);
 static bool _work_clear_time_delay(work_t *work);
+
+static timespec_t _delay_now(void)
+{
+#ifdef __APPLE__
+	timespec_t now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now))
+		fatal("%s: clock_gettime failed: %m", __func__);
+	return now;
+#else
+	return timespec_now();
+#endif
+}
+
+static timespec_t _deadline(const work_t *work)
+{
+#ifdef __APPLE__
+	return work->time_deadline;
+#else
+	return work->control.time_begin;
+#endif
+}
 
 /*
  * Remove delay dependency and release work back into work queue
@@ -125,57 +162,136 @@ static void _inspect(void)
 	int count, total;
 	foreach_delayed_work_t dargs = {
 		.magic = MAGIC_FOREACH_DELAYED_WORK,
-		.time = timespec_now(),
 	};
 
 	total = list_count(mgr.delayed_work);
 	count = list_delete_all(mgr.delayed_work, _inspect_work, &dargs);
-	_update_timer(dargs.shortest, dargs.time);
+	_update_timer(dargs.shortest);
 
 	log_flag(CONMGR, "%s: checked all timers and triggered %d/%d delayed work",
 		 __func__, count, total);
 }
 
-static struct itimerspec _calc_timer(work_t *shortest,
-				     const timespec_t time)
+#ifdef __APPLE__
+/* Replace the one-shot timer. The relative interval includes system sleep. */
+static int _arm_timer(timespec_t remaining)
 {
-	const timespec_t begin = shortest->control.time_begin;
+	struct kevent change;
+	intptr_t ns;
+	int rc;
 
-	if (slurm_conf.debug_flags & DEBUG_FLAG_CONMGR) {
-		char str[CTIME_STR_LEN];
+	if (remaining.tv_sec >= (INTPTR_MAX / NSEC_IN_SEC))
+		ns = INTPTR_MAX;
+	else
+		ns = MAX(1, remaining.tv_sec * NSEC_IN_SEC + remaining.tv_nsec);
 
-		timespec_ctime(begin, true, str, sizeof(str));
-
-		log_flag(CONMGR, "%s: setting conmgr timer for %s for %s()",
-			 __func__, str, shortest->callback.func_name);
-	}
-
-	return (struct itimerspec) {
-		.it_value = begin,
-	};
+	EV_SET(&change, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
+	       NOTE_NSECONDS | NOTE_MACH_CONTINUOUS_TIME, ns, NULL);
+	do {
+		rc = kevent(timer_fd, &change, 1, NULL, 0, NULL);
+	} while ((rc < 0) && (errno == EINTR));
+	return (rc < 0) ? errno : 0;
 }
 
-static void _update_timer(work_t *shortest, const timespec_t time)
+/* The timer thread never takes mgr.mutex or keeps a pointer to queued work. */
+static void *_timer_wait(void *arg)
 {
-	int rc;
-	struct itimerspec spec = {{0}};
+	(void) arg;
+	while (true) {
+		struct kevent event;
+		int rc;
+
+		rc = kevent(timer_fd, NULL, 0, &event, 1, NULL);
+		if ((rc < 0) && (errno == EINTR))
+			continue;
+		if (rc != 1)
+			fatal("%s: kevent timer wait failed: %m", __func__);
+
+		pthread_mutex_lock(&mutex);
+		if (timer_stop) {
+			pthread_mutex_unlock(&mutex);
+			return NULL;
+		}
+		if (timer_armed && (event.filter == EVFILT_TIMER)) {
+			/* No pending process-wide SIGALRM can outlive shutdown. */
+			if (signal_mgr_notify(SIGALRM) &&
+			    (rc = _arm_timer((timespec_t) {
+				     .tv_nsec = 10000000 })))
+				fatal("%s: timer retry failed: %s", __func__,
+				      slurm_strerror(rc));
+		}
+		pthread_mutex_unlock(&mutex);
+	}
+}
+
+static void _timer_fork_child(void)
+{
+	/* No timer thread survives fork; conmgr's child handler disables conmgr. */
+	timer_running = timer_armed = timer_initialized = false;
+	timer_stop = true;
+	/* Only the calling thread survives, so discard inherited wait state. */
+	mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+	/* kqueue descriptors are not inherited by fork children on Darwin. */
+	timer_fd = -1;
+}
+
+static void _timer_register_fork(void)
+{
+	timer_init_error = pthread_atfork(NULL, NULL, _timer_fork_child);
+}
+#endif
+
+static void _update_timer(work_t *shortest)
+{
+	int rc = 0;
+	timespec_t begin = { 0 };
 
 	if (shortest) {
-		spec = _calc_timer(shortest, time);
+		char str[CTIME_STR_LEN];
+
+		begin = _deadline(shortest);
+		timespec_ctime(shortest->control.time_begin, true, str,
+			       sizeof(str));
+		log_flag(CONMGR, "%s: setting conmgr timer for %s for %s()",
+			 __func__, str, shortest->callback.func_name);
 	} else {
 		log_flag(CONMGR, "%s: disabling conmgr timer", __func__);
 	}
 
 	slurm_mutex_lock(&mutex);
+	if (!timer_initialized) {
+		slurm_mutex_unlock(&mutex);
+		return;
+	}
+#ifdef __APPLE__
+	timer_armed = (shortest != NULL);
+	if (timer_armed) {
+		const timespec_t now = _delay_now();
+		timespec_t remaining = { 0 };
+
+		if (timespec_is_after(begin, now))
+			remaining = timespec_rem(begin, now);
+		rc = _arm_timer(remaining);
+	} else {
+		struct kevent change;
+
+		EV_SET(&change, 1, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+		if ((kevent(timer_fd, &change, 1, NULL, 0, NULL) < 0) &&
+		    (errno != ENOENT))
+			rc = errno;
+	}
+#else
+	struct itimerspec spec = { .it_value = begin };
+
 	rc = timer_settime(timer, TIMER_ABSTIME, &spec, NULL);
+#endif
 	slurm_mutex_unlock(&mutex);
 
 	if (rc) {
 		if ((rc == -1) && errno)
 			rc = errno;
-
-		error("%s: timer_set_time() failed: %s",
-		      __func__, slurm_strerror(rc));
+		error("%s: setting delayed-work timer failed: %s", __func__,
+		      slurm_strerror(rc));
 	}
 }
 
@@ -183,10 +299,10 @@ static void _update_timer(work_t *shortest, const timespec_t time)
 static int _inspect_work(void *x, void *key)
 {
 	work_t *work = x;
-	const timespec_t begin = work->control.time_begin;
+	const timespec_t begin = _deadline(work);
 	foreach_delayed_work_t *args = key;
-	const timespec_t now = timespec_now();
-	const bool trigger = timespec_is_after(now, begin);
+	const timespec_t now = _delay_now();
+	const bool trigger = !timespec_is_after(begin, now);
 
 	xassert(args->magic == MAGIC_FOREACH_DELAYED_WORK);
 	xassert(work->magic == MAGIC_WORK);
@@ -203,12 +319,16 @@ static int _inspect_work(void *x, void *key)
 			 (uintptr_t) work->callback.func);
 	}
 
+	/* list_delete_all releases triggered work before _update_timer runs. */
+	if (trigger)
+		return 1;
+
 	if (!args->shortest)
 		args->shortest = work;
-	else if (timespec_is_after(args->shortest->control.time_begin, begin))
+	else if (timespec_is_after(_deadline(args->shortest), begin))
 		args->shortest = work;
 
-	return trigger ? 1 : 0;
+	return 0;
 }
 
 extern timespec_t conmgr_calc_work_time_delay(
@@ -227,12 +347,53 @@ extern timespec_t conmgr_calc_work_time_delay(
 	}, timespec_now()));
 }
 
-extern void init_delayed_work(void)
+#ifdef __APPLE__
+static void _start_timer(void)
 {
 	int rc;
 
+	if ((rc = pthread_once(&timer_once, _timer_register_fork)) ||
+	    (rc = timer_init_error))
+		fatal("%s: registering timer fork handlers failed: %s", __func__,
+		      slurm_strerror(rc));
+	pthread_mutex_lock(&mutex);
+	if (timer_initialized) {
+		pthread_mutex_unlock(&mutex);
+		return;
+	}
+	/* kqueues are excluded from fork, so setting CLOEXEC has no fork race. */
+	if (((timer_fd = kqueue()) < 0) ||
+	    (fcntl(timer_fd, F_SETFD, FD_CLOEXEC) < 0))
+		fatal("%s: creating timer kqueue failed: %m", __func__);
+	{
+		struct kevent change;
+
+		EV_SET(&change, 2, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+		if (kevent(timer_fd, &change, 1, NULL, 0, NULL) < 0)
+			fatal("%s: registering timer shutdown event failed: %m",
+			      __func__);
+	}
+	timer_stop = timer_armed = false;
+	rc = pthread_create(&timer_thread, NULL, _timer_wait, NULL);
+	timer_running = timer_initialized = !rc;
+	pthread_mutex_unlock(&mutex);
+	if (rc)
+		fatal("%s: creating timer thread failed: %s", __func__,
+		      slurm_strerror(rc));
+}
+#endif
+
+extern void init_delayed_work(void)
+{
+#ifndef __APPLE__
+	int rc;
+#endif
+
 	mgr.delayed_work = list_create(_release_work);
 
+#ifdef __APPLE__
+	_start_timer();
+#else
 again:
 	slurm_mutex_lock(&mutex);
 	{
@@ -243,6 +404,7 @@ again:
 		};
 
 		rc = timer_create(TIMESPEC_CLOCK_TYPE, &sevp, &timer);
+		timer_initialized = !rc;
 	}
 	slurm_mutex_unlock(&mutex);
 
@@ -257,23 +419,69 @@ again:
 	else if (rc)
 		fatal("%s: timer_create() failed: %s",
 		      __func__, slurm_strerror(rc));
+#endif
+}
+
+extern void stop_delayed_work(void)
+{
+	int rc;
+
+	slurm_mutex_lock(&mutex);
+	if (!timer_initialized) {
+		slurm_mutex_unlock(&mutex);
+		return;
+	}
+	timer_initialized = false;
+#ifdef __APPLE__
+	timer_stop = true;
+	timer_armed = false;
+	{
+		struct kevent change;
+
+		EV_SET(&change, 2, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+		if (kevent(timer_fd, &change, 1, NULL, 0, NULL) < 0)
+			fatal("%s: waking timer for shutdown failed: %m", __func__);
+	}
+	slurm_mutex_unlock(&mutex);
+	/* No signal may be emitted after this join returns. */
+	if (timer_running && (rc = pthread_join(timer_thread, NULL)))
+		fatal("%s: joining timer thread failed: %s", __func__,
+		      slurm_strerror(rc));
+	timer_running = false;
+	close(timer_fd);
+	timer_fd = -1;
+#else
+	rc = timer_delete(timer);
+	slurm_mutex_unlock(&mutex);
+	if (rc)
+		fatal("%s: timer_delete() failed: %m", __func__);
+#endif
+}
+
+extern void pause_delayed_work(void)
+{
+#ifdef __APPLE__
+	/* Quiesce permits closing descriptors before an in-process exec. */
+	stop_delayed_work();
+#endif
+}
+
+extern void resume_delayed_work(void)
+{
+#ifdef __APPLE__
+	/* Preserve queued work and its original monotonic deadlines. */
+	_start_timer();
+	_inspect();
+#endif
 }
 
 extern void free_delayed_work(void)
 {
-	int rc;
-
 	if (!mgr.delayed_work)
 		return;
 
+	stop_delayed_work();
 	FREE_NULL_LIST(mgr.delayed_work);
-
-	slurm_mutex_lock(&mutex);
-	rc = timer_delete(timer);
-	slurm_mutex_unlock(&mutex);
-
-	if (rc)
-		fatal("%s: timer_delete() failed: %m", __func__);
 }
 
 static void _update_delayed_work(bool locked)
@@ -323,6 +531,20 @@ static bool _work_clear_time_delay(work_t *work)
 
 extern void add_work_delayed(work_t *work)
 {
+#ifdef __APPLE__
+	const timespec_t now = timespec_now();
+	const timespec_t begin = work->control.time_begin;
+	timespec_t remaining = { 0 };
+
+	/*
+	 * Convert once: later wall-clock corrections must not lengthen or
+	 * shorten an already queued delay. Keep the original time for logging.
+	 */
+	if (timespec_is_after(begin, now))
+		remaining = timespec_rem(begin, now);
+	work->time_deadline =
+		timespec_normalize(timespec_add(_delay_now(), remaining));
+#endif
 	list_append(mgr.delayed_work, work);
 	_update_delayed_work(true);
 }

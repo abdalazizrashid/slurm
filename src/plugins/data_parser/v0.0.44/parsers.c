@@ -5087,7 +5087,11 @@ static int PARSE_FUNC(SIGNAL)(const parser_t *const parser, void *obj,
 				   "Unknown signal %s", str);
 	}
 
+#ifdef SIGRTMAX
 	if ((*sig < 1) || (*sig >= SIGRTMAX)) {
+#else
+	if ((*sig < 1) || (*sig >= NSIG)) {
+#endif
 		on_warn(PARSING, parser->type, args, NULL, __func__,
 			"Non-standard signal number: %u", *sig);
 	}

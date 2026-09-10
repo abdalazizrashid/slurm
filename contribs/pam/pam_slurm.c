@@ -55,9 +55,8 @@
 /*  Define the externally visible functions in this file.
  */
 #define PAM_SM_ACCOUNT
+#include <security/pam_appl.h>
 #include <security/pam_modules.h>
-#include <security/_pam_macros.h>
-
 
 struct _options {
 	int disable_sys_info;
@@ -75,9 +74,9 @@ void __attribute__ ((constructor)) libpam_slurm_init(void);
 void __attribute__ ((destructor)) libpam_slurm_fini(void);
 
 /*
- *  Handle for libslurm.so
+ *  Handle for the Slurm shared library.
  *
- *  We open libslurm.so via dlopen () in order to pass the
+ *  We open the library via dlopen () in order to pass the
  *   flag RTDL_GLOBAL so that subsequently loaded modules have
  *   access to libslurm symbols. This is pretty much only needed
  *   for dynamically loaded modules that would otherwise be
@@ -434,16 +433,25 @@ _send_denial_msg(pam_handle_t *pamh, struct _options *opts,
 }
 
 /*
- * Dynamically open system's libslurm.so with RTLD_GLOBAL flag.
+ * Dynamically open the Slurm shared library with RTLD_GLOBAL.
  *  This allows subsequently loaded modules access to libslurm symbols.
  */
 extern void libpam_slurm_init (void)
 {
+#ifndef __APPLE__
 	char libslurmname[64];
+#endif
 
 	if (slurm_h)
 		return;
 
+#ifdef __APPLE__
+	/* Use the configured library, including installations outside /usr/lib. */
+	slurm_h = dlopen(SLURM_LIBSLURM_PATH, RTLD_NOW | RTLD_GLOBAL);
+	if (!slurm_h)
+		_log_msg(LOG_ERR, "Unable to dlopen %s: %s",
+			 SLURM_LIBSLURM_PATH, dlerror());
+#else
 	/* First try to use the same libslurm version ("libslurm.so.24.0.0"),
 	 * Second try to match the major version number ("libslurm.so.24"),
 	 * Otherwise use "libslurm.so" */
@@ -473,6 +481,7 @@ extern void libpam_slurm_init (void)
 		_log_msg (LOG_ERR, "Unable to dlopen libslurm.so: %s\n",
  			  dlerror ());
 	}
+#endif
 
 	return;
 }

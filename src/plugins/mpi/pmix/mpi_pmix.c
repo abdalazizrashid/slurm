@@ -114,10 +114,18 @@ static void *_libpmix_open(void)
 	 */
 #ifdef PMIXP_LIBPATH
 	xstrfmtcat(full_path, "%s/", PMIXP_LIBPATH);
+#elif defined(__APPLE__)
+	xstrcat(full_path, "@rpath/");
 #endif
-	xstrfmtcat(full_path, "libpmix.so.2");
+#ifdef __APPLE__
+	xstrcat(full_path, "libpmix.2.dylib");
+#else
+	xstrcat(full_path, "libpmix.so.2");
+#endif
 
 	lib_plug = dlopen(full_path, RTLD_LAZY | RTLD_GLOBAL);
+	if (!lib_plug)
+		PMIXP_ERROR("Cannot load %s: %s", full_path, dlerror());
 	xfree(full_path);
 
 	if (lib_plug && (HAVE_PMIX_VER != pmixp_lib_get_version())) {

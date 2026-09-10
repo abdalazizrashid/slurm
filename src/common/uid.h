@@ -53,6 +53,13 @@
 #define PW_BUF_SIZE 65536
 
 /*
+ * Set real and effective uid to uid. Returns 0, or -1 with errno set.
+ * On systems without setresuid(), the saved uid is also replaced. Use only
+ * in children which will exec or exit without restoring their former uid.
+ */
+extern int setuid_real_effective(uid_t uid);
+
+/*
  * Handle EINTR and ERANGE when possible for getpwuid_r().
  * This accepts a pointer to the buffer currently being used as well as one that
  * can be xmalloxed if we encounter ERANGE.  The caller is expected to free

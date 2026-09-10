@@ -1370,8 +1370,8 @@ static bool _attempt_accept(conmgr_fd_t *con)
 	slurm_mutex_unlock(&mgr.mutex);
 
 	/* try to get the new file descriptor and retry on errors */
-	if ((fd = accept4(input_fd, (struct sockaddr *) &addr, &addrlen,
-			  SOCK_CLOEXEC)) < 0) {
+	if ((fd = slurm_accept(input_fd, (struct sockaddr *) &addr, &addrlen,
+			       false)) < 0) {
 		int accept_errno = errno;
 
 		if (accept_errno == EINTR) {
@@ -1833,6 +1833,9 @@ static bool _watch_loop(void)
 	if (mgr.quiesce.requested) {
 		int waiters;
 
+		/* Join native timer delivery before draining pending signals. */
+		pause_delayed_work();
+
 		/*
 		 * Limit amount of time watch() will sleep to ensure that the
 		 * quiesce timeout is enforced
@@ -1879,6 +1882,8 @@ static bool _watch_loop(void)
 			while (mgr.quiesce.active)
 				EVENT_WAIT(&mgr.quiesce.on_stop_quiesced,
 					   &mgr.mutex);
+
+			resume_delayed_work();
 
 			log_flag(CONMGR, "%s: END: quiesced state", __func__);
 		}

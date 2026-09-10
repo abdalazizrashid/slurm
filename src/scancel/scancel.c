@@ -99,7 +99,7 @@ typedef struct job_cancel_info {
 static	int num_active_threads = 0;
 static	pthread_mutex_t  num_active_threads_lock;
 static	pthread_cond_t   num_active_threads_cond;
-static	pthread_mutex_t  max_delay_lock;
+static pthread_mutex_t max_delay_lock = PTHREAD_MUTEX_INITIALIZER;
 static	uint32_t max_resp_time = 0;
 static	int request_count = 0;
 opt_t opt;

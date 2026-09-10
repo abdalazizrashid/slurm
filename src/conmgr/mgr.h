@@ -69,6 +69,10 @@ typedef struct {
 	conmgr_fd_ref_t *ref;
 	conmgr_callback_t callback;
 	conmgr_work_control_t control;
+#ifdef __APPLE__
+	/* Frozen monotonic deadline; control.time_begin remains a wall timestamp. */
+	timespec_t time_deadline;
+#endif
 } work_t;
 
 /*

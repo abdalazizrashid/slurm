@@ -45,7 +45,7 @@
 #include "src/common/log.h"
 #include "src/common/env.h"
 
-#if !defined(__FreeBSD__)
+#if defined(__linux__)
 extern int set_oom_adj(int adj)
 {
 	int fd;
@@ -104,11 +104,11 @@ extern void set_oom_adj_env(int adj)
 		setenvfs("SLURMSTEPD_OOM_ADJ=%d", adj);
 }
 
-#else /* __FreeBSD__ */
+#else /* no Linux OOM score interface */
 
 extern int set_oom_adj(int adj)
 {
-	/* FreeBSD does not handle OOM the same way Linux does */
+	/* OOM scores in procfs are a Linux-specific daemon policy. */
 	(void) adj; /* unused argument */
 	return 0;
 }

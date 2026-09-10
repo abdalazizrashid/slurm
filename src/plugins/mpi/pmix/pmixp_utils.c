@@ -94,7 +94,7 @@ int pmixp_usock_create_srv(char *path)
 		return SLURM_ERROR;
 	}
 
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = slurm_socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
 		PMIXP_ERROR_STD("Cannot create UNIX socket");
 		return SLURM_ERROR;
@@ -108,6 +108,11 @@ int pmixp_usock_create_srv(char *path)
 		PMIXP_ERROR_STD("Cannot bind() UNIX socket %s", path);
 		goto err_fd;
 	}
+
+#ifndef HAVE_ACCEPT4
+	if ((ret = fcntl(fd, F_SETFL, O_NONBLOCK)) < 0)
+		goto err_bind;
+#endif
 
 	if ((ret = listen(fd, 64))) {
 		PMIXP_ERROR_STD("Cannot listen(%d, 64) UNIX socket %s", fd,

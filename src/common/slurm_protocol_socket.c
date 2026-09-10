@@ -573,8 +573,8 @@ extern int slurm_init_msg_engine(slurm_addr_t *addr, bool quiet)
 	if (quiet)
 		log_lvl = LOG_LEVEL_DEBUG;
 
-	if ((fd = socket(addr->ss_family, SOCK_STREAM | SOCK_CLOEXEC,
-			 IPPROTO_TCP)) < 0) {
+	if ((fd = slurm_socket(addr->ss_family, SOCK_STREAM, IPPROTO_TCP)) <
+	    0) {
 		format_print(log_lvl, "Error creating slurm stream socket: %m");
 		return fd;
 	}
@@ -590,6 +590,14 @@ extern int slurm_init_msg_engine(slurm_addr_t *addr, bool quiet)
 		format_print(log_lvl, "Error binding slurm stream socket: %m");
 		goto error;
 	}
+
+#ifndef HAVE_ACCEPT4
+	/* slurm_accept() must not block while serializing fd creation with fork. */
+	if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
+		rc = SLURM_ERROR;
+		goto error;
+	}
+#endif
 
 	if (listen(fd, SLURM_DEFAULT_LISTEN_BACKLOG) < 0) {
 		format_print(log_lvl,
@@ -613,8 +621,27 @@ error:
 extern int slurm_accept_conn(int fd, slurm_addr_t *addr)
 {
 	socklen_t len = sizeof(*addr);
-	int sock = accept4(fd, (struct sockaddr *) addr, &len, SOCK_CLOEXEC);
-	net_set_nodelay(sock, true, NULL);
+	int sock;
+
+#ifndef HAVE_ACCEPT4
+	/* The listener is nonblocking; wait without holding the fd creation lock. */
+	while (true) {
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+
+		if (poll(&pfd, 1, -1) < 0)
+			return -1;
+		if ((sock = slurm_accept(fd, (struct sockaddr *) addr, &len,
+					 false)) >= 0)
+			break;
+		if ((errno != EAGAIN) && (errno != EWOULDBLOCK))
+			return -1;
+		len = sizeof(*addr);
+	}
+#else
+	sock = slurm_accept(fd, (struct sockaddr *) addr, &len, false);
+#endif
+	if (sock >= 0)
+		net_set_nodelay(sock, true, NULL);
 	return sock;
 }
 
@@ -630,8 +657,8 @@ extern void *slurm_accept_msg_conn(int fd, slurm_addr_t *addr)
 		socklen_t len = sizeof(*addr);
 		int err = SLURM_COMMUNICATIONS_RECEIVE_ERROR;
 
-		if ((sock = accept4(fd, (struct sockaddr *) addr, &len,
-				    SOCK_CLOEXEC)) >= 0) {
+		if ((sock = slurm_accept(fd, (struct sockaddr *) addr, &len,
+					 false)) >= 0) {
 			log_flag(NET, "%s: [fd:%d] accept()ed: fd:%d -> %pA",
 				 __func__, fd, sock, addr);
 			break;
@@ -642,13 +669,19 @@ extern void *slurm_accept_msg_conn(int fd, slurm_addr_t *addr)
 			err = errno;
 
 		if (err == EINTR) {
-			log_flag(NET, "%s: [fd:%d] retry accept4() due to interrupt: %s",
+			log_flag(NET, "%s: [fd:%d] retry slurm_accept() due to interrupt: %s",
 				 __func__, fd, slurm_strerror(err));
 			continue;
 		}
+		/* Nonblocking callers retry when readiness disappeared. */
+		if (err == EAGAIN || err == EWOULDBLOCK ||
+		    err == ECONNABORTED) {
+			errno = err;
+			return NULL;
+		}
 
-		error("%s: Unable to accept() connection to address %pA: %m",
-		      __func__, addr);
+		error("%s: Unable to accept() on listener fd %d: %s",
+		      __func__, fd, slurm_strerror(err));
 		errno = err;
 		return NULL;
 	} while (true);
@@ -680,8 +713,7 @@ extern int slurm_open_stream(slurm_addr_t *addr, bool retry)
 	}
 
 	while (true) {
-		fd = socket(addr->ss_family, SOCK_STREAM | SOCK_CLOEXEC,
-			    IPPROTO_TCP);
+		fd = slurm_socket(addr->ss_family, SOCK_STREAM, IPPROTO_TCP);
 		if (fd < 0) {
 			error("Error creating slurm stream socket: %m");
 			return SLURM_ERROR;
@@ -759,7 +791,17 @@ extern int slurm_open_unix_stream(char *addr_name, int sock_flags, int *fd)
 		return rc;
 	}
 
-	if ((*fd = socket(AF_UNIX, SOCK_STREAM | sock_flags, 0)) < 0) {
+#ifdef __APPLE__
+	/* Darwin has no SOCK_* creation flags; all internal sockets are CLOEXEC. */
+	if (sock_flags) {
+		errno = EINVAL;
+		return EINVAL;
+	}
+	*fd = slurm_socket(AF_UNIX, SOCK_STREAM, 0);
+#else
+	*fd = socket(AF_UNIX, SOCK_STREAM | sock_flags, 0);
+#endif
+	if (*fd < 0) {
 		rc = errno;
 		error("%s: [%s]: socket() failed: %m", __func__, addr_name);
 		return rc;

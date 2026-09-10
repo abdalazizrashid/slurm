@@ -244,6 +244,7 @@ libcommon_la_SOURCES =				\
 	xutf.c					\
 	xutf.h
 
+
 libcommon_la_LIBADD   = $(libselinux_LIBS)
 
 libcommon_la_LDFLAGS  = $(LIB_LDFLAGS) -module --export-dynamic

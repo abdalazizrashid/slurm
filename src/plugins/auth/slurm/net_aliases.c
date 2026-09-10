@@ -187,7 +187,7 @@ data_for_each_cmd_t _for_each_list_addr(data_t *data, void *arg)
 	}
 
 	if (port > UINT16_MAX) {
-		error("%s: data parsing failed, int greater than 16 bits (%s, %s:%lu)",
+		error("%s: data parsing failed, int greater than 16 bits (%s, %s:%"PRId64")",
 		      __func__, node_name, address, port);
 		rc = DATA_FOR_EACH_FAIL;
 		goto cleanup;

@@ -592,6 +592,7 @@
 
 /* fetch_config.[ch] functions */
 #define dump_to_memfd slurm_dump_to_memfd
+#define close_memfd slurm_close_memfd
 
 /* run_command.[ch] functions */
 #define run_command slurm_run_command

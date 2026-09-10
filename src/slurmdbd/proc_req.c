@@ -82,6 +82,8 @@ static void _process_job_start(slurmdbd_conn_t *slurmdbd_conn,
 extern void slurmdbd_conn_init(slurmdbd_conn_t *dbd_conn)
 {
 	*dbd_conn = (slurmdbd_conn_t) SLURMDBD_CONN_INITIALIZER;
+	/* Every accepted client uses this lock during disconnect cleanup. */
+	slurm_mutex_init(&dbd_conn->pcon_send_lock);
 }
 
 extern void slurmdbd_conn_members_destroy(slurmdbd_conn_t *dbd_conn)
@@ -272,7 +274,6 @@ static void _add_registered_cluster(slurmdbd_conn_t *dbd_conn)
 	}
 	list_iterator_destroy(itr);
 	if (!slurmdbd_conn) {
-		slurm_mutex_init(&dbd_conn->pcon_send_lock);
 		slurm_mutex_lock(&dbd_conn->pcon_send_lock);
 		dbd_conn->pcon_send = xmalloc(sizeof(persist_conn_t));
 		dbd_conn->pcon_send->cluster_name =

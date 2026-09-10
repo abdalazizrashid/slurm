@@ -41,6 +41,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -176,6 +177,7 @@ static void _connection_fini_callback(void *arg)
 	slurmdbd_conn_t *dbd_conn = (slurmdbd_conn_t *) arg;
 	bool stay_locked = false;
 	int tries = 0;
+	int rc;
 
 	/*
 	 * If we are sending updates to this ctld, it is holding
@@ -203,7 +205,8 @@ static void _connection_fini_callback(void *arg)
 	 */
 	if (dbd_conn->pcon_send)
 		dbd_conn->pcon_send->flags &= ~PERSIST_FLAG_RECONNECT;
-	while (pthread_mutex_trylock(&dbd_conn->pcon_send_lock) == EBUSY) {
+	while ((rc = pthread_mutex_trylock(&dbd_conn->pcon_send_lock)) ==
+	       EBUSY) {
 		if (dbd_conn->pcon_send) {
 			int fd = dbd_conn->pcon_send->last_fd;
 			if (fd > 0) {
@@ -214,10 +217,13 @@ static void _connection_fini_callback(void *arg)
 		}
 		if (tries++ >= 100) {
 			slurm_mutex_lock(&dbd_conn->pcon_send_lock);
+			rc = 0;
 			break;
 		}
 		usleep(10000); /* 10ms */
 	}
+	if (rc)
+		fatal("%s: pthread_mutex_trylock(): %s", __func__, strerror(rc));
 
 	slurm_persist_conn_destroy(dbd_conn->pcon_send);
 	dbd_conn->pcon_send = NULL;

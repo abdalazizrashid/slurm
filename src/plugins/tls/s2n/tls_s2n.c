@@ -33,6 +33,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
 \*****************************************************************************/
 
+#include <fcntl.h>
 #include <s2n.h>
 #include <signal.h>
 #include <sys/poll.h>
@@ -1002,6 +1003,27 @@ static void _cleanup_tls_conn(tls_conn_t **conn_ptr)
 	xfree(conn);
 }
 
+static int _set_write_fd(tls_conn_t *conn, int fd)
+{
+#ifdef __APPLE__
+	/*
+	 * s2n requires its caller to handle SIGPIPE. Darwin can suppress it
+	 * on the TLS transport itself, including pipes, without changing the
+	 * process signal disposition or consuming another pending signal.
+	 */
+	if (fcntl(fd, F_SETNOSIGPIPE, 1)) {
+		error("%s: cannot suppress SIGPIPE on TLS fd:%d: %m",
+		      __func__, fd);
+		return SLURM_ERROR;
+	}
+#endif
+	if (s2n_connection_set_write_fd(conn->s2n_conn, fd) < 0) {
+		on_s2n_error(conn, s2n_connection_set_write_fd);
+		return SLURM_ERROR;
+	}
+	return SLURM_SUCCESS;
+}
+
 static int _set_conn_s2n_conf(tls_conn_t *conn,
 			      const conn_args_t *tls_conn_args)
 {
@@ -1202,10 +1224,8 @@ extern void *tls_p_create_conn(const conn_args_t *tls_conn_args)
 
 		xassert(tls_conn_args->output_fd < 0);
 		xassert(io_context);
-	} else if (s2n_connection_set_write_fd(conn->s2n_conn,
-					       tls_conn_args->output_fd) < 0) {
+	} else if (_set_write_fd(conn, tls_conn_args->output_fd)) {
 		/* Associate a connection with an outgoing descriptor */
-		on_s2n_error(conn, s2n_connection_set_write_fd);
 		goto fail;
 	}
 
@@ -1248,9 +1268,11 @@ extern int tls_p_shutdown_conn(tls_conn_t *conn)
 	s2n_blocked_status blocked = S2N_NOT_BLOCKED;
 	int rc = SLURM_SUCCESS;
 	int shutdown_rc = S2N_SUCCESS;
+#ifndef __APPLE__
 	int saved_errno = 0;
 	sigset_t sigpipe_set, oldset, pending;
 	bool sigpipe_was_pending = false;
+#endif
 
 	xassert(conn);
 	xassert(conn->magic == TLS_CONN_MAGIC);
@@ -1276,6 +1298,11 @@ extern int tls_p_shutdown_conn(tls_conn_t *conn)
 	 * get s2n_recv() == -1 and assume the connection failed.
 	 */
 
+#ifdef __APPLE__
+	/* Native output descriptors suppress SIGPIPE when attached above.
+	 * The connection-manager callback transport only buffers bytes. */
+	shutdown_rc = s2n_shutdown_send(conn->s2n_conn, &blocked);
+#else
 	/*
 	 * s2n issues its socket write() without MSG_NOSIGNAL, so sending our
 	 * close_notify to a peer that has already closed raises SIGPIPE (s2n
@@ -1308,6 +1335,7 @@ extern int tls_p_shutdown_conn(tls_conn_t *conn)
 	}
 	pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 	errno = saved_errno;
+#endif
 
 	if (shutdown_rc != S2N_SUCCESS) {
 		if (s2n_error_get_type(s2n_errno) == S2N_ERR_T_BLOCKED) {
@@ -1563,8 +1591,7 @@ extern int tls_p_set_conn_fds(tls_conn_t *conn, int input_fd, int output_fd)
 		on_s2n_error(conn, s2n_connection_set_read_fd);
 		return SLURM_ERROR;
 	}
-	if (s2n_connection_set_write_fd(conn->s2n_conn, output_fd)) {
-		on_s2n_error(conn, s2n_connection_set_write_fd);
+	if (_set_write_fd(conn, output_fd)) {
 		return SLURM_ERROR;
 	}
 

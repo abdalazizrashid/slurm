@@ -57,6 +57,15 @@
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
 
+extern int setuid_real_effective(uid_t uid)
+{
+#ifdef HAVE_SETRESUID
+	return setresuid(uid, uid, -1);
+#else
+	return setreuid(uid, uid);
+#endif
+}
+
 typedef enum {
 	UID_CACHE_SORT_UID = 0,
 	UID_CACHE_SORT_USERNAME = 1,

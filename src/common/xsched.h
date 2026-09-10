@@ -36,6 +36,9 @@
 #ifndef _XSCHED_H
 #define _XSCHED_H
 
+#include <stddef.h>
+#include <sys/types.h>
+
 #ifdef __FreeBSD__
 #include <sys/param.h> /* param.h must precede cpuset.h */
 #include <sys/cpuset.h>
@@ -47,15 +50,34 @@ typedef cpuset_t cpu_set_t;
 typedef struct {
 	size_t max_cpus;
 	size_t size;
+#ifdef __APPLE__
+	/* Scheduler masks do not imply support for kernel CPU affinity. */
+	unsigned long mask[]; /* MUST BE LAST */
+#else
 	/* the mask is technically cpu_set_t[] */
 	cpu_set_t mask; /* MUST BE LAST */
+#endif
 } xcpuset_t;
 
+#ifdef __APPLE__
+extern int xcpuset_count(const xcpuset_t *mask);
+extern void xcpuset_zero(xcpuset_t *mask);
+extern void xcpuset_set(size_t cpu, xcpuset_t *mask);
+extern void xcpuset_clr(size_t cpu, xcpuset_t *mask);
+extern int xcpuset_isset(size_t cpu, const xcpuset_t *mask);
+
+#define XCPU_COUNT(_mask) xcpuset_count(_mask)
+#define XCPU_ZERO(_mask) xcpuset_zero(_mask)
+#define XCPU_SET(_cpu, _mask) xcpuset_set(_cpu, _mask)
+#define XCPU_CLR(_cpu, _mask) xcpuset_clr(_cpu, _mask)
+#define XCPU_ISSET(_cpu, _mask) xcpuset_isset(_cpu, _mask)
+#else
 #define XCPU_COUNT(_mask) CPU_COUNT_S(_mask->size, &_mask->mask)
 #define XCPU_ZERO(_mask) CPU_ZERO_S(_mask->size, &_mask->mask)
 #define XCPU_SET(_cpu, _mask) CPU_SET_S(_cpu, _mask->size, &_mask->mask)
 #define XCPU_CLR(_cpu, _mask) CPU_CLR_S(_cpu, _mask->size, &_mask->mask)
 #define XCPU_ISSET(_cpu, _mask) CPU_ISSET_S(_cpu, _mask->size, &_mask->mask)
+#endif
 
 extern xcpuset_t *xcpuset_alloc(void);
 
@@ -75,18 +97,18 @@ extern char *task_cpuset_to_str(const xcpuset_t *mask);
  */
 extern xcpuset_t *task_str_to_cpuset(const char *str);
 
-/* Wrapper for sched_setaffinity() */
+/* Wrapper for sched_setaffinity(); returns -1/ENOTSUP on macOS. */
 extern int xsetaffinity(pid_t pid, xcpuset_t *mask);
 
 /*
  * Returns an allocated xcpuset_t structure describing the current cpu affinity.
  * IN - pid, or 0 for current process
- * RET - xmalloc'd xcpuset_t structure
+ * RET - xmalloc'd xcpuset_t structure; NULL/ENOTSUP on macOS
  */
 extern xcpuset_t *xgetaffinity(pid_t pid);
 
 /*
- * RET CPUs set or 0 on error
+ * RET CPUs set, online processors on macOS, or 0 on error
  */
 extern int get_assigned_cpu_count(void);
 

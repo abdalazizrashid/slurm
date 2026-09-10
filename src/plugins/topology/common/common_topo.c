@@ -58,10 +58,7 @@
  * overwritten when linking with the slurmctld.
  */
 
-#if defined (__APPLE__)
-extern list_t *part_list __attribute__((weak_import));
-extern bitstr_t *idle_node_bitmap __attribute__((weak_import));
-#else
+#if !defined(__APPLE__)
 list_t *part_list = NULL;
 bitstr_t *idle_node_bitmap;
 #endif

@@ -42,6 +42,8 @@
 
 #ifdef HAVE_PTY_H
 #  include <pty.h>
+#elif defined(HAVE_UTIL_H)
+#include <util.h>
 #endif
 
 #ifdef HAVE_UTMP_H
@@ -51,6 +53,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -207,7 +210,7 @@ struct window_info {
 	stepd_step_task_info_t *task;
 	conn_t *conn;
 };
-#ifdef HAVE_PTY_H
+#ifdef HAVE_OPENPTY
 static void _spawn_window_manager(stepd_step_task_info_t *task);
 static void *_window_manager(void *arg);
 #endif
@@ -845,7 +848,7 @@ again:
 /**********************************************************************
  * Pseudo terminal functions
  **********************************************************************/
-#ifdef HAVE_PTY_H
+#ifdef HAVE_OPENPTY
 static void *_window_manager(void *arg)
 {
 	struct window_info *win_info = (struct window_info *) arg;
@@ -984,7 +987,7 @@ static int _init_task_stdio_fds(stepd_step_task_info_t *task)
 	/*
 	 *  Initialize stdin
 	 */
-#ifdef HAVE_PTY_H
+#ifdef HAVE_OPENPTY
 	if (step->flags & LAUNCH_PTY) {
 		/* All of the stdin fails unless EVERY
 		 * task gets an eio object for stdin.
@@ -1072,7 +1075,7 @@ static int _init_task_stdio_fds(stepd_step_task_info_t *task)
 		int pin[2];
 
 		debug5("  stdin uses an eio object");
-		if (pipe2(pin, O_CLOEXEC) < 0) {
+		if (slurm_pipe(pin, O_CLOEXEC) < 0) {
 			error("stdin pipe: %m");
 			return SLURM_ERROR;
 		}
@@ -1086,7 +1089,7 @@ static int _init_task_stdio_fds(stepd_step_task_info_t *task)
 	/*
 	 *  Initialize stdout
 	 */
-#ifdef HAVE_PTY_H
+#ifdef HAVE_OPENPTY
 	if (step->flags & LAUNCH_PTY) {
 		if (task->gtid == 0) {
 			task->stdout_fd = dup(task->stdin_fd);
@@ -1166,7 +1169,7 @@ static int _init_task_stdio_fds(stepd_step_task_info_t *task)
 	} else {
 		/* create pipe and eio object */
 		int pout[2];
-#if HAVE_PTY_H
+#if HAVE_OPENPTY
 		struct termios tio;
 		if (!(step->flags & LAUNCH_BUFFERED_IO)) {
 #if HAVE_SETRESUID
@@ -1216,7 +1219,7 @@ static int _init_task_stdio_fds(stepd_step_task_info_t *task)
 	/*
 	 *  Initialize stderr
 	 */
-#ifdef HAVE_PTY_H
+#ifdef HAVE_OPENPTY
 	if (step->flags & LAUNCH_PTY) {
 		if (task->gtid == 0) {
 			/* Make a file descriptor for the task to write to, but

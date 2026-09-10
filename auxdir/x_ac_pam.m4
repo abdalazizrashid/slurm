@@ -35,10 +35,20 @@ AC_DEFUN([X_AC_PAM], [
 
     AC_CHECK_LIB([pam_misc],
         [misc_conv],
-        [ac_have_pam_misc=yes; PAM_LIBS="$PAM_LIBS -lpam_misc"])
+        [ac_have_pam_conv=yes; PAM_LIBS="$PAM_LIBS -lpam_misc"])
+
+    if test "x$ac_have_pam" = "xyes" -a "x$ac_have_pam_conv" != "xyes"; then
+      AC_CHECK_HEADER([security/openpam.h], [
+        AC_CHECK_LIB([pam], [openpam_ttyconv], [
+          ac_have_pam_conv=yes
+          AC_DEFINE([HAVE_OPENPAM_TTYCONV], [1],
+                    [Define if OpenPAM provides the PAM conversation function])
+        ])
+      ], [], [[#include <security/pam_appl.h>]])
+    fi
 
     AC_SUBST(PAM_LIBS)
-    if test "x$ac_have_pam" = "xyes" -a "x$ac_have_pam_misc" = "xyes"; then
+    if test "x$ac_have_pam" = "xyes" -a "x$ac_have_pam_conv" = "xyes"; then
       AC_DEFINE(HAVE_PAM,, [define if you have the PAM library])
     else
       if test -z "$enable_pam"; then
@@ -51,7 +61,7 @@ AC_DEFUN([X_AC_PAM], [
     AC_MSG_RESULT([no])
   fi
   AM_CONDITIONAL(HAVE_PAM,
-      test "x$x_ac_pam" = "xyes" -a "x$ac_have_pam" = "xyes" -a "x$ac_have_pam_misc" = "xyes")
+      test "x$x_ac_pam" = "xyes" -a "x$ac_have_pam" = "xyes" -a "x$ac_have_pam_conv" = "xyes")
 
 
   AC_ARG_WITH(pam_dir,
@@ -64,7 +74,9 @@ AC_DEFUN([X_AC_PAM], [
 	fi
     ],
     [
-	if test -d /lib64/security ; then
+	if test "x$darwin_build" = "xyes"; then
+	  PAM_DIR="$libdir/pam"
+	elif test -d /lib64/security ; then
 	  PAM_DIR="/lib64/security"
 	else
 	  PAM_DIR="/lib/security"
@@ -75,4 +87,3 @@ AC_DEFUN([X_AC_PAM], [
   AC_DEFINE_UNQUOTED(PAM_DIR, "$pam_dir", [Define PAM module installation directory.])
 
 ])
-

@@ -260,6 +260,9 @@ extern void conmgr_fini(void)
 
 	log_flag(CONMGR, "%s: connection manager shutting down", __func__);
 
+	/* Stop timer delivery before restoring the application's SIGALRM handler. */
+	stop_delayed_work();
+
 	/* stop and cleanup signal manager */
 	signal_mgr_fini();
 

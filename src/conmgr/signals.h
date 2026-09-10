@@ -40,6 +40,11 @@
 #include "src/conmgr/conmgr.h"
 #include "src/conmgr/mgr.h"
 
+/* Queue an in-process notification using the signal work dispatch path.
+ * RET 0 if queued; errno otherwise (including EAGAIN before startup).
+ */
+extern int signal_mgr_notify(int signo);
+
 /* start the signal manager */
 extern void signal_mgr_start(conmgr_callback_args_t conmgr_args, void *arg);
 

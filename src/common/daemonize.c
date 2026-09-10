@@ -57,6 +57,7 @@
 
 #include "src/common/daemonize.h"
 #include "src/common/fd.h"
+#include "src/common/fetch_config.h"
 #include "src/common/log.h"
 #include "src/common/macros.h"
 #include "src/common/read_config.h"
@@ -437,6 +438,13 @@ extern int become_user(uid_t uid, gid_t gid, gid_t *gids, int gids_count,
 
 	if (new_session && (rc = start_new_session()))
 		return rc;
+
+	/* Preserve configless file access and cleanup after the permanent drop. */
+	if ((rc = chown_memfd_files(uid, gid))) {
+		error("Unable to transfer temporary configuration files: %s",
+		      slurm_strerror(rc));
+		return rc;
+	}
 
 #ifdef __linux__
 	if (setresgid(gid, gid, gid)) {

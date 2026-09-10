@@ -49,78 +49,81 @@
 #include "src/slurmd/slurmstepd/slurmstepd_job.h"
 
 /*
- * If get_list is false make sure ps->gid_list is initialized before
- * hand to prevent xfree.
+ * If get_list is false, gid_list must already be initialized. The historical
+ * flag permits releasing a previous snapshot; every successful drop now keeps
+ * a complete snapshot because callers may need to reclaim the group list.
+ * Success holds the auth setuid lock until reclaim_privileges(). Failure
+ * restores the snapshot and releases the lock before returning.
  */
 extern int drop_privileges(stepd_step_rec_t *step, bool do_setuid,
 			   struct priv_state *ps, bool get_list)
 {
+	int saved_errno;
+
 	auth_setuid_lock();
 	ps->saved_uid = getuid();
-	ps->saved_gid = getgid();
+	ps->saved_gid = getegid();
+	ps->groups_changed = false;
+	if (!get_list)
+		xfree(ps->gid_list);
+	ps->gid_list = NULL;
 
 	ps->ngids = getgroups(0, NULL);
 	if (ps->ngids == -1) {
 		error("%s: getgroups(): %m", __func__);
-		return SLURM_ERROR;
+		goto fail;
 	}
-	if (get_list) {
-		ps->gid_list = xcalloc(ps->ngids, sizeof(gid_t));
-
-		if (getgroups(ps->ngids, ps->gid_list) < 0) {
-			error("%s: couldn't get %d groups: %m",
-			      __func__, ps->ngids);
-			xfree(ps->gid_list);
-			return SLURM_ERROR;
-		}
+	ps->gid_list = xcalloc(ps->ngids, sizeof(gid_t));
+	if (ps->ngids && getgroups(ps->ngids, ps->gid_list) < 0) {
+		error("%s: couldn't get %d groups: %m", __func__, ps->ngids);
+		goto fail;
 	}
 
-	/* No need to drop privileges if we're not running as root */
+	/* No need to drop privileges if we're not running as root. */
 	if (getuid())
 		return SLURM_SUCCESS;
-
 	if (setegid(step->gid) < 0) {
 		error("setegid: %m");
-		return SLURM_ERROR;
+		goto fail;
 	}
-
+	ps->groups_changed = true;
 	if (setgroups(step->ngids, step->gids) < 0) {
 		error("setgroups: %m");
-		return SLURM_ERROR;
+		goto fail;
 	}
-
 	if (do_setuid && seteuid(step->uid) < 0) {
 		error("seteuid: %m");
-		return SLURM_ERROR;
+		goto fail;
 	}
-
 	return SLURM_SUCCESS;
+fail:
+	saved_errno = errno;
+	if (reclaim_privileges(ps) != SLURM_SUCCESS)
+		error("%s: could not restore privileges after failed drop", __func__);
+	errno = saved_errno;
+	return SLURM_ERROR;
 }
 
 extern int reclaim_privileges(struct priv_state *ps)
 {
 	int rc = SLURM_SUCCESS;
 
-	/*
-	 * No need to reclaim privileges if our uid == step->uid
-	 */
-	if (geteuid() == ps->saved_uid)
-		goto done;
-
-	if (seteuid(ps->saved_uid) < 0) {
+	if ((geteuid() != ps->saved_uid) && seteuid(ps->saved_uid) < 0) {
 		error("seteuid: %m");
 		rc = SLURM_ERROR;
-	} else if (setegid(ps->saved_gid) < 0) {
-		error("setegid: %m");
-		rc = SLURM_ERROR;
-	} else if (setgroups(ps->ngids, ps->gid_list) < 0) {
-		error("setgroups: %m");
-		rc = SLURM_ERROR;
+	} else if (ps->groups_changed) {
+		/* GIDs may have changed even when do_setuid was false. */
+		if (setegid(ps->saved_gid) < 0) {
+			error("setegid: %m");
+			rc = SLURM_ERROR;
+		}
+		if (setgroups(ps->ngids, ps->gid_list) < 0) {
+			error("setgroups: %m");
+			rc = SLURM_ERROR;
+		}
 	}
-
-done:
 	auth_setuid_unlock();
 	xfree(ps->gid_list);
-
+	ps->groups_changed = false;
 	return rc;
 }

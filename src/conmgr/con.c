@@ -42,6 +42,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <libproc.h>
+#endif
+
 #if defined(__linux__)
 #include <sys/sysmacros.h>
 #endif /* __linux__ */
@@ -410,7 +414,8 @@ static char *_resolve_fd(int fd, struct stat *stat_ptr)
 		return xstrdup_printf("device:%u.%u", major(stat_ptr->st_dev),
 				      minor(stat_ptr->st_dev));
 #else /* !__linux__ */
-		return xstrdup_printf("device:0x%"PRIx64, stat_ptr->st_dev);
+		return xstrdup_printf("device:0x%" PRIx64,
+				      (uint64_t) stat_ptr->st_dev);
 #endif /* !__linux__ */
 	}
 
@@ -579,18 +584,38 @@ static void _check_timeouts(const conmgr_timeouts_t *timeouts)
 	xassert(!timespec_is_zero(timeouts->write_complete));
 }
 
+static int _socket_is_listening(int fd, int *listening)
+{
+#ifdef __APPLE__
+	struct socket_fdinfo info;
+	int bytes;
+
+	/* SO_ACCEPTCONN is defined but getsockopt does not implement it. */
+	errno = 0;
+	bytes = proc_pidfdinfo(getpid(), fd, PROC_PIDFDSOCKETINFO, &info,
+			       sizeof(info));
+	if (bytes != sizeof(info))
+		return errno ? errno : EIO;
+	*listening = !!(info.psi.soi_options & SO_ACCEPTCONN);
+	return SLURM_SUCCESS;
+#else
+	socklen_t len = sizeof(*listening);
+
+	if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, listening, &len))
+		return errno;
+	return SLURM_SUCCESS;
+#endif
+}
+
 static int _validate_socket_fd(int input_fd, int output_fd, const bool has_in,
 			       const bool has_out, bool is_listen)
 {
 	int in_listening = 0, out_listening = 0;
+	int rc;
 
 	if (has_in) {
-		socklen_t len = sizeof(in_listening);
-
-		if (getsockopt(input_fd, SOL_SOCKET, SO_ACCEPTCONN,
-			       &in_listening, &len)) {
-			int rc = errno;
-			log_flag(CONMGR, "%s: [fd:%d->%d] getsockopt(fd:%d, SO_ACCEPTCONN) failed: %s",
+		if ((rc = _socket_is_listening(input_fd, &in_listening))) {
+			log_flag(CONMGR, "%s: [fd:%d->%d] querying listener state on fd:%d failed: %s",
 				 __func__, input_fd, output_fd, input_fd,
 				 slurm_strerror(rc));
 			return rc;
@@ -598,12 +623,8 @@ static int _validate_socket_fd(int input_fd, int output_fd, const bool has_in,
 	}
 
 	if (has_out) {
-		socklen_t len = sizeof(out_listening);
-
-		if (getsockopt(output_fd, SOL_SOCKET, SO_ACCEPTCONN,
-			       &out_listening, &len)) {
-			int rc = errno;
-			log_flag(CONMGR, "%s: [fd:%d->%d] getsockopt(fd:%d, SO_ACCEPTCONN) failed: %s",
+		if ((rc = _socket_is_listening(output_fd, &out_listening))) {
+			log_flag(CONMGR, "%s: [fd:%d->%d] querying listener state on fd:%d failed: %s",
 				 __func__, input_fd, output_fd, output_fd,
 				 slurm_strerror(rc));
 			return rc;
@@ -1333,7 +1354,7 @@ static int _add_unix_listener(const conmgr_timeouts_t *timeouts,
 			      const conmgr_events_t *events, void *arg)
 {
 	slurm_addr_t addr = { 0 };
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = slurm_socket(AF_UNIX, SOCK_STREAM, 0);
 	int rc = EINVAL;
 	socklen_t bind_len = 0;
 
@@ -1404,8 +1425,8 @@ static int _add_socket_listener(const conmgr_timeouts_t *timeouts,
 			continue;
 		}
 
-		fd = socket(addr->ai_family, addr->ai_socktype | SOCK_CLOEXEC,
-			    addr->ai_protocol);
+		fd = slurm_socket(addr->ai_family, addr->ai_socktype,
+				  addr->ai_protocol);
 		if (fd < 0)
 			fatal("%s: [%s] Unable to create socket: %m",
 			      __func__, addrinfo_to_string(addr, true));
@@ -1524,11 +1545,10 @@ extern int conmgr_create_connect_socket(conmgr_con_type_t type,
 	socklen_t connect_len = 0;
 
 	if (addr->ss_family == AF_UNIX) {
-		fd = socket(addr->ss_family, (SOCK_STREAM | SOCK_CLOEXEC), 0);
+		fd = slurm_socket(addr->ss_family, SOCK_STREAM, 0);
 	} else if ((addr->ss_family == AF_INET) ||
 		   (addr->ss_family == AF_INET6)) {
-		fd = socket(addr->ss_family, (SOCK_STREAM | SOCK_CLOEXEC),
-			    IPPROTO_TCP);
+		fd = slurm_socket(addr->ss_family, SOCK_STREAM, IPPROTO_TCP);
 	} else {
 		return EAFNOSUPPORT;
 	}

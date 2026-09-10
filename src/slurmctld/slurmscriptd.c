@@ -604,7 +604,8 @@ static int _run_script(run_command_args_t *run_command_args,
 	int ms_timeout;
 	char *resp = NULL;
 	bool killed = false;
-	int tmp_fd = 0;
+	int tmp_fd = -1;
+	char *tmp_file = NULL;
 	uint32_t job_id = script_msg->job_id;
 	int timeout = script_msg->timeout;
 	char *tmp_file_env_name = script_msg->tmp_file_env_name;
@@ -619,7 +620,6 @@ static int _run_script(run_command_args_t *run_command_args,
 	run_command_args->status = &status;
 
 	if (tmp_file_str) {
-		char *tmp_file = NULL;
 		/*
 		 * Open a file into which we dump tmp_file_str.
 		 * Set an environment variable so the script will know how to
@@ -632,12 +632,10 @@ static int _run_script(run_command_args_t *run_command_args,
 		if (tmp_fd == SLURM_ERROR) {
 			error("Failed to create tmp file for %s",
 			      run_command_args->script_type);
-			tmp_fd = 0;
 		} else {
 			env_array_append(&run_command_args->env,
 					 tmp_file_env_name, tmp_file);
 		}
-		xfree(tmp_file);
 	}
 
 	if (run_command_args->tid)
@@ -673,8 +671,8 @@ static int _run_script(run_command_args_t *run_command_args,
 	if (run_command_args->tid)
 		track_script_remove(pthread_self());
 
-	if (tmp_fd)
-		close(tmp_fd);
+	close_memfd(tmp_fd, tmp_file);
+	xfree(tmp_file);
 
 	if (resp_msg)
 		*resp_msg = resp;

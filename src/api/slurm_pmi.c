@@ -38,6 +38,11 @@
 
 #include <stdlib.h>
 #include <sys/time.h>
+#ifdef __APPLE__
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <poll.h>
+#endif
 
 #include "slurm/slurm.h"
 #include "slurm/slurm_errno.h"
@@ -65,6 +70,88 @@ static void _delay_rpc(int pmi_rank, int pmi_size);
 static int  _forward_comm_set(kvs_comm_set_t *kvs_set_ptr);
 static int  _get_addr(void);
 static void _set_pmi_time(void);
+
+#ifdef __APPLE__
+/* Advertise the bound interface; a shortened Mac hostname can resolve elsewhere. */
+static int _reply_hostname(const slurm_addr_t *address, char *hostname,
+			   size_t size)
+{
+	const char *override = getenv("SLURM_PMI_RESP_IFHN");
+	bool wildcard;
+	socklen_t length;
+	int rc;
+
+	if (!address || !hostname || !size)
+		return EINVAL;
+	if (override) {
+		if (!override[0] || strlen(override) >= size)
+			return ENAMETOOLONG;
+		strlcpy(hostname, override, size);
+		return 0;
+	}
+	if (address->ss_family == AF_INET) {
+		const struct sockaddr_in *v4 = (const void *) address;
+		wildcard = v4->sin_addr.s_addr == htonl(INADDR_ANY);
+		length = sizeof(*v4);
+	} else if (address->ss_family == AF_INET6) {
+		const struct sockaddr_in6 *v6 = (const void *) address;
+		wildcard = IN6_IS_ADDR_UNSPECIFIED(&v6->sin6_addr);
+		length = sizeof(*v6);
+	} else
+		return EAFNOSUPPORT;
+	if (!wildcard) {
+		rc = getnameinfo((const struct sockaddr *) address, length,
+				 hostname, size, NULL, 0, NI_NUMERICHOST);
+		return rc ? (rc == EAI_SYSTEM ? errno : EADDRNOTAVAIL) : 0;
+	}
+	/* A wildcard is not a routable callback address. Preserve the full name. */
+	memset(hostname, 0xff, size);
+	if (gethostname(hostname, size))
+		return errno;
+	return memchr(hostname, '\0', size) ? 0 : ENAMETOOLONG;
+}
+
+/*
+ * A PMI barrier can wait indefinitely for another rank to enter it.
+ * MessageTimeout bounds message transfer, not collective rendezvous. Wait
+ * outside the fd creation lock, then accept from the nonblocking listener.
+ */
+static conn_t *_accept_reply(int fd, slurm_addr_t *address)
+{
+	struct pollfd descriptor = { .fd = fd, .events = POLLIN };
+
+	if (fd < 0) {
+		errno = EBADF;
+		return NULL;
+	}
+	while (true) {
+		conn_t *connection;
+		int ready;
+
+		ready = poll(&descriptor, 1, -1);
+		if (ready < 0 && errno == EINTR)
+			continue;
+		if (ready < 0)
+			return NULL;
+		if (!ready)
+			continue;
+		if (descriptor.revents & POLLNVAL) {
+			errno = EBADF;
+			return NULL;
+		}
+		if (!(descriptor.revents & POLLIN)) {
+			errno = ECONNABORTED;
+			return NULL;
+		}
+		if ((connection = slurm_accept_msg_conn(fd, address)))
+			return connection;
+		if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
+		    errno != ECONNABORTED)
+			return NULL;
+		/* Readiness may be stale; wait again without holding the fd lock. */
+	}
+}
+#endif
 
 /* Delay an RPC to srun in order to avoid overwhelming the srun command.
  * The delay is based upon the number of tasks, this task's rank, and PMI_TIME.
@@ -227,7 +314,9 @@ extern int slurm_pmi_get_kvs_comm_set(kvs_comm_set_t **kvs_set_ptr,
 	slurm_addr_t slurm_addr, srun_reply_addr;
 	char hostname[HOST_NAME_MAX];
 	kvs_get_msg_t data;
+#ifndef __APPLE__
 	char *env_pmi_ifhn;
+#endif
 
 	if (kvs_set_ptr == NULL)
 		return EINVAL;
@@ -248,16 +337,25 @@ extern int slurm_pmi_get_kvs_comm_set(kvs_comm_set_t **kvs_set_ptr,
 			error("slurm_init_msg_engine_port: %m");
 			return SLURM_ERROR;
 		}
+#ifndef __APPLE__
 		fd_set_blocking(pmi_fd);
+#endif
 	}
 	if (slurm_get_stream_addr(pmi_fd, &slurm_addr) < 0) {
 		error("slurm_get_stream_addr: %m");
 		return SLURM_ERROR;
 	}
+#ifdef __APPLE__
+	if ((rc = _reply_hostname(&slurm_addr, hostname, sizeof(hostname)))) {
+		error("PMI response address: %s", slurm_strerror(rc));
+		return rc;
+	}
+#else
 	if ((env_pmi_ifhn = getenv("SLURM_PMI_RESP_IFHN")))
 		strlcpy(hostname, env_pmi_ifhn, sizeof(hostname));
 	else
 		gethostname_short(hostname, sizeof(hostname));
+#endif
 
 	memset(&data, 0, sizeof(data));
 	data.task_id = pmi_rank;
@@ -309,7 +407,12 @@ extern int slurm_pmi_get_kvs_comm_set(kvs_comm_set_t **kvs_set_ptr,
 	}
 
 	/* get the message after all tasks reach the barrier */
-	if (!(conn = slurm_accept_msg_conn(pmi_fd, &srun_reply_addr))) {
+#ifdef __APPLE__
+	conn = _accept_reply(pmi_fd, &srun_reply_addr);
+#else
+	conn = slurm_accept_msg_conn(pmi_fd, &srun_reply_addr);
+#endif
+	if (!conn) {
 		error("slurm_accept_msg_conn: %m");
 		return errno;
 	}

@@ -133,7 +133,12 @@ static bool externally_locked = false;
 
 static void _atfork_child(void)
 {
+#ifdef __APPLE__
+	/* Darwin rejects init on the inherited, already initialized rwlock. */
+	context_lock = (pthread_rwlock_t) PTHREAD_RWLOCK_INITIALIZER;
+#else
 	slurm_rwlock_init(&context_lock);
+#endif
 
 	/*
 	 * If we're in _drop_privileges() when we fork we need to hold the lock

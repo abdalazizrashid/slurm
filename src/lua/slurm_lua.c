@@ -78,10 +78,7 @@ static void *lua_handle = NULL;
  * slurmctld we will have these symbols defined. They will get overwritten when
  * linking with the slurmctld.
  */
-#if defined (__APPLE__)
-extern uint16_t accounting_enforce __attribute__((weak_import));
-extern void *acct_db_conn  __attribute__((weak_import));
-#else
+#if !defined(__APPLE__)
 uint16_t accounting_enforce = 0;
 void *acct_db_conn = NULL;
 #endif
@@ -427,10 +424,33 @@ static int _get_qos_priority(lua_State *L)
 {
 	const char *qos_name = lua_tostring(L, -1);
 	slurmdb_qos_rec_t qos = { 0 };
+	void *db_conn;
+	uint16_t enforce;
+
+#ifdef __APPLE__
+	/*
+	 * Mach-O does not interpose fallback data definitions. Resolve the
+	 * controller's data only when this controller-specific helper is used;
+	 * other Lua consumers need neither a controller nor undefined data
+	 * symbols in their executables.
+	 */
+	void **controller_db_conn = dlsym(RTLD_DEFAULT, "acct_db_conn");
+	uint16_t *controller_enforce =
+		dlsym(RTLD_DEFAULT, "accounting_enforce");
+
+	if (!controller_db_conn || !controller_enforce) {
+		error("Lua get_qos_priority requires slurmctld accounting state");
+		return 0;
+	}
+	db_conn = *controller_db_conn;
+	enforce = *controller_enforce;
+#else
+	db_conn = acct_db_conn;
+	enforce = accounting_enforce;
+#endif
 
 	qos.name = xstrdup(qos_name);
-	if (assoc_mgr_fill_in_qos(acct_db_conn, &qos, accounting_enforce, NULL,
-				  false)) {
+	if (assoc_mgr_fill_in_qos(db_conn, &qos, enforce, NULL, false)) {
 		error("Invalid QOS name: %s", qos.name);
 		xfree(qos.name);
 		return 0;

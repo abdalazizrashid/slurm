@@ -63,9 +63,9 @@
 #include "src/plugins/auth/common/auth_common.h"
 #include "src/plugins/auth/slurm/auth_slurm.h"
 
-#define SLURMCTLD_SACK_SOCKET "/run/slurmctld/sack.socket"
-#define SLURMDBD_SACK_SOCKET "/run/slurmdbd/sack.socket"
-#define SLURM_SACK_SOCKET "/run/slurm/sack.socket"
+#define SLURMCTLD_SACK_SOCKET SLURM_RUN_DIR "/slurmctld/sack.socket"
+#define SLURMDBD_SACK_SOCKET SLURM_RUN_DIR "/slurmdbd/sack.socket"
+#define SLURM_SACK_SOCKET SLURM_RUN_DIR "/slurm/sack.socket"
 #define SACK_RECONFIG_ENV "SACK_RECONFIG_FD"
 
 static int sack_fd = -1;
@@ -93,16 +93,16 @@ static void _prepare_run_dir(const char *subdir, bool slurm_user)
 		user = "SlurmdUser";
 	}
 
-	if ((dirfd = open("/run", O_DIRECTORY | O_NOFOLLOW)) < 0)
-		fatal("%s: could not open /run", __func__);
+	if ((dirfd = open(SLURM_RUN_DIR, O_DIRECTORY | O_NOFOLLOW)) < 0)
+		fatal("%s: could not open " SLURM_RUN_DIR, __func__);
 
 	if ((subdirfd = openat(dirfd, subdir,
 			       (O_DIRECTORY | O_NOFOLLOW))) < 0) {
 		/* just assume ENOENT and attempt to create */
 		if (mkdirat(dirfd, subdir, 0755) < 0)
-			fatal("%s: failed to create /run/%s", __func__, subdir);
+			fatal("%s: failed to create " SLURM_RUN_DIR "/%s", __func__, subdir);
 		if (fchownat(dirfd, subdir, uid, -1, AT_SYMLINK_NOFOLLOW) < 0)
-			fatal("%s: failed to change ownership of /run/%s to %s",
+			fatal("%s: failed to change ownership of " SLURM_RUN_DIR "/%s to %s",
 			      __func__, subdir, user);
 		close(dirfd);
 		return;
@@ -110,19 +110,19 @@ static void _prepare_run_dir(const char *subdir, bool slurm_user)
 
 	if (!fstat(subdirfd, &statbuf)) {
 		if (!(statbuf.st_mode & S_IFDIR))
-			fatal("%s: /run/%s exists but is not a directory",
+			fatal("%s: " SLURM_RUN_DIR "/%s exists but is not a directory",
 			      __func__, subdir);
 		if (statbuf.st_uid != uid) {
 			if (statbuf.st_uid)
-				fatal("%s: /run/%s exists but is owned by %u",
+				fatal("%s: " SLURM_RUN_DIR "/%s exists but is owned by %u",
 				      __func__, subdir, statbuf.st_uid);
-			warning("%s: /run/%s exists but is owned by %u, not %s",
+			warning("%s: " SLURM_RUN_DIR "/%s exists but is owned by %u, not %s",
 				__func__, subdir, statbuf.st_uid, user);
 		}
 	}
 
 	if (unlinkat(subdirfd, "sack.socket", 0) && (errno != ENOENT))
-		fatal("%s: failed to remove /run/%s/sack.socket",
+		fatal("%s: failed to remove " SLURM_RUN_DIR "/%s/sack.socket",
 		      __func__, subdir);
 
 	close(subdirfd);
@@ -314,7 +314,9 @@ extern void init_sack_conmgr(void)
 			if (!valid_runtime_directory(runtime_dir))
 				fatal("%s: Invalid RUNTIME_DIRECTORY=%s environment variable",
 				      __func__, runtime_dir);
-			_prepare_run_dir(runtime_dir + 5, true);
+			_prepare_run_dir(runtime_dir + strlen(SLURM_RUN_DIR) +
+						 1,
+					 true);
 			xstrfmtcat(runtime_socket, "%s/sack.socket",
 				   runtime_dir);
 			path = runtime_socket;
@@ -333,8 +335,7 @@ extern void init_sack_conmgr(void)
 		path = NULL; /* avoid reuse as it may point to runtime_socket */
 		xfree(runtime_socket);
 
-		if ((sack_fd = socket(AF_UNIX, (SOCK_STREAM | SOCK_CLOEXEC), 0))
-		     < 0)
+		if ((sack_fd = slurm_socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 			fatal("%s: socket() failed: %m", __func__);
 
 		/* set value of socket path */

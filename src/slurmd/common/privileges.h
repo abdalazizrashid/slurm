@@ -43,6 +43,7 @@ struct priv_state {
 	gid_t saved_gid;
 	gid_t *gid_list;
 	int ngids;
+	bool groups_changed;
 };
 
 extern int drop_privileges(stepd_step_rec_t *step, bool do_setuid,

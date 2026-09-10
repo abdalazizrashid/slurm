@@ -715,8 +715,13 @@ static int _forkexec_slurmstepd(uint16_t type, void *req, slurm_addr_t *cli,
 				uint16_t protocol_version)
 {
 	pid_t pid;
-	int to_stepd[2] = {-1, -1};
-	int to_slurmd[2] = {-1, -1};
+	int to_stepd[2] = { -1, -1 };
+	int to_slurmd[2] = { -1, -1 };
+
+	if (xstrcasestr(slurm_conf.launch_params, "darwin_es_guard")) {
+		error("darwin_es_guard is unavailable in this build");
+		return ENOTSUP;
+	}
 
 	if (pipe(to_stepd) < 0 || pipe(to_slurmd) < 0) {
 		error("%s: pipe failed: %m", __func__);
@@ -1585,8 +1590,8 @@ static int _open_as_other(char *path_name, int flags, int mode, uint32_t jobid,
 		error("%s: uid:%u setgid(%u): %m", __func__, uid, gid);
 		_exit(errno);
 	}
-	if (setresuid(uid, uid, -1) < 0) {
-		error("%s: setresuid(%u, %u, %d): %m", __func__, uid, uid, -1);
+	if (setuid_real_effective(uid) < 0) {
+		error("%s: setuid_real_effective(%u): %m", __func__, uid);
 		_exit(errno);
 	}
 
@@ -2539,7 +2544,7 @@ static void _rpc_run_power_action(slurm_msg_t *msg)
 	char *exec_name = NULL;
 	char *program = NULL;
 	char *filename = NULL;
-	int tmp_fd = 0;
+	int tmp_fd = -1;
 	slurm_conf_t *cf = NULL;
 
 	if (!action_msg || !action_msg->action_name ||
@@ -2610,13 +2615,10 @@ static void _rpc_run_power_action(slurm_msg_t *msg)
 		if (tmp_fd == SLURM_ERROR) {
 			error("Failed to create tmp file for power action %s",
 			      action_msg->action_name);
-			tmp_fd = 0;
 		} else {
 			env_array_append(&env, action_msg->file_env_name,
 					 filename);
-			close(tmp_fd);
 		}
-		xfree(filename);
 	}
 
 	log_flag(POWER, "Running power action %s", action_msg->action_name);
@@ -2637,6 +2639,8 @@ static void _rpc_run_power_action(slurm_msg_t *msg)
 	run_args.orphan_on_shutdown = true;
 
 	resp = run_command(&run_args);
+	close_memfd(tmp_fd, filename);
+	xfree(filename);
 
 	if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
 		error("Power action %s exited with status %d",

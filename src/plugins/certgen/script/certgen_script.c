@@ -145,7 +145,7 @@ static char *_exec_internal_keygen(void)
 
 	key = _exec_script(script_path, NULL);
 
-	close(script_fd);
+	close_memfd(script_fd, script_path);
 	xfree(script_path);
 	xfree(keygen_contents);
 
@@ -172,7 +172,7 @@ static char *_exec_internal_certgen(char *key)
 
 	cert = _exec_script(script_path, key);
 
-	close(script_fd);
+	close_memfd(script_fd, script_path);
 	xfree(script_path);
 	xfree(certgen_contents);
 
