@@ -54,6 +54,7 @@ typedef struct {
 	uint64_t mem_used; /* MB */
 	uint64_t vsize_limit; /* MB */
 	uint64_t vsize_used; /* MB */
+	bool step_present;
 } job_mem_info_t;
 
 static int _extract_limit_from_step(void *x, void *arg);
@@ -173,7 +174,7 @@ static int _add_step_usage(void *x, void *arg)
 	step_loc_t *stepd = x;
 	job_mem_info_t *job_mem_info_ptr = arg;
 	job_step_stat_t *resp = NULL;
-	uint64_t step_rss = 0, step_vsize = 0;
+	uint64_t step_rss = INFINITE64, step_vsize = INFINITE64;
 	int fd = -1;
 
 	while (job_mem_info_ptr->job_id) {
@@ -185,6 +186,9 @@ static int _add_step_usage(void *x, void *arg)
 	/* job memory limit unknown or unlimited */
 	if (!job_mem_info_ptr->job_id)
 		return 1;
+
+	/* A missing sample or a failed connection does not prove job completion. */
+	job_mem_info_ptr->step_present = true;
 
 	fd = stepd_connect(stepd->directory, stepd->nodename, &stepd->step_id,
 			   &stepd->protocol_version);
@@ -204,13 +208,13 @@ static int _add_step_usage(void *x, void *arg)
 		debug2("%s: %ps RSS:%"PRIu64" B VSIZE:%"PRIu64" B",
 		       __func__, &stepd->step_id, step_rss, step_vsize);
 
-		if (step_rss != INFINITE64) {
+		if ((step_rss != INFINITE64) && (step_rss != NO_VAL64)) {
 			step_rss /= 1048576; /* B to MB */
 			step_rss = MAX(step_rss, 1);
 			job_mem_info_ptr->mem_used += step_rss;
 		}
 
-		if (step_vsize != INFINITE64) {
+		if ((step_vsize != INFINITE64) && (step_vsize != NO_VAL64)) {
 			step_vsize /= 1048576; /* B to MB */
 			step_vsize = MAX(step_vsize, 1);
 			job_mem_info_ptr->vsize_used += step_vsize;
@@ -231,6 +235,7 @@ extern void job_mem_limit_enforce(void)
 	job_mem_limits_t *job_limits_ptr;
 	int job_cnt;
 	job_mem_info_t *job_mem_info_ptr = NULL;
+	bool inventory_complete;
 
 	if (!slurm_conf.job_acct_oom_kill)
 		return;
@@ -257,18 +262,24 @@ extern void job_mem_limit_enforce(void)
 	list_iterator_destroy(job_limits_iter);
 	slurm_mutex_unlock(&job_limits_mutex);
 
-	steps = stepd_available(conf->spooldir, conf->node_name);
+	steps = stepd_available_checked(conf->spooldir, conf->node_name,
+					&inventory_complete);
+	if (!inventory_complete) {
+		FREE_NULL_LIST(steps);
+		xfree(job_mem_info_ptr);
+		return;
+	}
 	list_for_each(steps, _add_step_usage, job_mem_info_ptr);
 	FREE_NULL_LIST(steps);
 
 	for (int i = 0; i < job_cnt; i++) {
 		/* No steps found for this job, remove record */
-		if (!job_mem_info_ptr[i].mem_used) {
+		if (!job_mem_info_ptr[i].step_present) {
 			slurm_mutex_lock(&job_limits_mutex);
 			list_delete_all(job_limits_list, _match_job,
 					&job_mem_info_ptr[i].job_id);
 			slurm_mutex_unlock(&job_limits_mutex);
-			break;
+			continue;
 		}
 
 		if ((job_mem_info_ptr[i].mem_limit) &&

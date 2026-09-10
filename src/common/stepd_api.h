@@ -220,6 +220,14 @@ extern int stepd_attach(int fd, uint16_t stepd_protocol_version,
 extern list_t *stepd_available(const char *directory, const char *nodename);
 
 /*
+ * As above, with explicit inventory completeness. A partial/empty list can
+ * accompany an error; complete is true only after a successful directory scan.
+ * Callers making destructive decisions must require a complete inventory.
+ */
+extern list_t *stepd_available_checked(const char *directory,
+				       const char *nodename, bool *complete);
+
+/*
  * Return true if the process with process ID "pid" is found in
  * the proctrack container of the slurmstepd "step".
  */

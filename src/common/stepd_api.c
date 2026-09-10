@@ -744,6 +744,13 @@ _sockname_regex(regex_t *re, const char *filename, slurm_step_id_t *step_id)
  */
 extern list_t *stepd_available(const char *directory, const char *nodename)
 {
+	bool complete;
+	return stepd_available_checked(directory, nodename, &complete);
+}
+
+extern list_t *stepd_available_checked(const char *directory,
+				       const char *nodename, bool *complete)
+{
 	list_t *l = NULL;
 	DIR *dp;
 	struct dirent *ent;
@@ -752,6 +759,9 @@ extern list_t *stepd_available(const char *directory, const char *nodename)
 	char *local_nodename = NULL;
 	char *alloc_dir = NULL;
 	const char *dir = directory;
+	bool regex_initialized = false;
+
+	*complete = false;
 
 	if (nodename == NULL) {
 		if (!(local_nodename = _guess_nodename())) {
@@ -771,6 +781,7 @@ extern list_t *stepd_available(const char *directory, const char *nodename)
 	l = list_create((ListDelF) _free_step_loc_t);
 	if (_sockname_regex_init(&re, nodename) == -1)
 		goto done;
+	regex_initialized = true;
 
 	/*
 	 * Make sure that "directory" exists and is a directory.
@@ -788,10 +799,18 @@ extern list_t *stepd_available(const char *directory, const char *nodename)
 		goto done;
 	}
 
-	while ((ent = readdir(dp)) != NULL) {
+	while (true) {
 		step_loc_t *loc;
 		slurm_step_id_t step_id;
 
+		errno = 0;
+		if (!(ent = readdir(dp))) {
+			if (errno)
+				error("Unable to read directory %s: %m", dir);
+			else
+				*complete = true;
+			break;
+		}
 		if (!_sockname_regex(&re, ent->d_name, &step_id)) {
 			char *full_string =
 				xstrdup_printf("%s/%s", dir, ent->d_name);
@@ -810,7 +829,8 @@ extern list_t *stepd_available(const char *directory, const char *nodename)
 	closedir(dp);
 done:
 	xfree(local_nodename);
-	regfree(&re);
+	if (regex_initialized)
+		regfree(&re);
 	xfree(alloc_dir);
 	return l;
 }
