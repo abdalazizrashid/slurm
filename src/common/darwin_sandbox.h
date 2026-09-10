@@ -1,5 +1,5 @@
 /*****************************************************************************\
- *  darwin_launch.h - native macOS launch/resource controls.
+ *  darwin_sandbox.h - native child-process access restrictions.
  *****************************************************************************
  *
  *  This file is part of Slurm, a resource management program.
@@ -32,33 +32,22 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
 \*****************************************************************************/
 
-#ifndef _DARWIN_LAUNCH_H
-#define _DARWIN_LAUNCH_H
+#ifndef _DARWIN_SANDBOX_H
+#define _DARWIN_SANDBOX_H
 
-#include <stdbool.h>
 #include <stdint.h>
 
-/* Internal task-child state; never populated from a workload environment. */
-/* All helpers return zero or an errno value. Zero MiB disables the policy. */
-extern int darwin_launch_probe(uint64_t initial_image_mib);
-extern int darwin_launch_prepare(uint64_t initial_image_mib);
-extern bool darwin_launch_configured(void);
-/* Set in the parent from the authenticated local allocation, before fork. */
-extern void darwin_launch_prepare_gpu(bool deny_fresh_connections);
-extern bool darwin_launch_gpu_denied(void);
-/* Task child only, before runtime/MPI/SPANK/prolog or GPU acquisition. */
-extern int darwin_launch_apply_early(void);
-/* Store validated per-process ceilings in the parent, without applying them. */
-extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
-					 uint64_t address_mib);
-/* Epilog child only, before exec; does not prepare an initial-image limit. */
-extern int darwin_launch_apply_epilog(void);
+#define DARWIN_SANDBOX_DENY_GPU_OPEN (1U << 0)
+
 /*
- * Replaces this process, preserving PID and the existing stepd wait contract.
- * Only returns an errno on failure. The footprint policy covers this image:
- * ordinary exec and fork can reset it. It is not a process-tree RAM budget.
+ * Return zero or an errno value. Zero flags do nothing on every platform.
+ * Unknown flags are rejected; unsupported platforms return ENOTSUP.
+ *
+ * Apply once, only in the task child, before untrusted code or GPU capability
+ * acquisition. The restriction survives fork/exec and cannot be relaxed.
+ * A later call cannot extend an existing sandbox. This API neither selects
+ * allocated GPUs nor revokes existing rights.
  */
-extern int darwin_launch_exec(const char *path, char *const argv[],
-			      char *const env[]);
+extern int darwin_sandbox_apply(uint32_t flags);
 
 #endif

@@ -1,5 +1,5 @@
 /*****************************************************************************\
- *  darwin_launch.h - native macOS launch/resource controls.
+ *  darwin-sandbox-test.c - native GPU policy flag validation.
  *****************************************************************************
  *
  *  This file is part of Slurm, a resource management program.
@@ -32,33 +32,31 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
 \*****************************************************************************/
 
-#ifndef _DARWIN_LAUNCH_H
-#define _DARWIN_LAUNCH_H
+#include "config.h"
 
-#include <stdbool.h>
+#include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-/* Internal task-child state; never populated from a workload environment. */
-/* All helpers return zero or an errno value. Zero MiB disables the policy. */
-extern int darwin_launch_probe(uint64_t initial_image_mib);
-extern int darwin_launch_prepare(uint64_t initial_image_mib);
-extern bool darwin_launch_configured(void);
-/* Set in the parent from the authenticated local allocation, before fork. */
-extern void darwin_launch_prepare_gpu(bool deny_fresh_connections);
-extern bool darwin_launch_gpu_denied(void);
-/* Task child only, before runtime/MPI/SPANK/prolog or GPU acquisition. */
-extern int darwin_launch_apply_early(void);
-/* Store validated per-process ceilings in the parent, without applying them. */
-extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
-					 uint64_t address_mib);
-/* Epilog child only, before exec; does not prepare an initial-image limit. */
-extern int darwin_launch_apply_epilog(void);
-/*
- * Replaces this process, preserving PID and the existing stepd wait contract.
- * Only returns an errno on failure. The footprint policy covers this image:
- * ordinary exec and fork can reset it. It is not a process-tree RAM budget.
- */
-extern int darwin_launch_exec(const char *path, char *const argv[],
-			      char *const env[]);
+#include "src/common/darwin_sandbox.h"
 
+#define CHECK(test) \
+	do { \
+		if (!(test)) { \
+			fprintf(stderr, "%s:%d: %s (errno=%d)\n", __FILE__, \
+				__LINE__, #test, errno); \
+			exit(1); \
+		} \
+	} while (0)
+
+int main(void)
+{
+	CHECK(!darwin_sandbox_apply(0));
+	CHECK(darwin_sandbox_apply(UINT32_MAX) == EINVAL);
+#if !defined(__APPLE__) || !defined(HAVE_SANDBOX_INIT)
+	CHECK(darwin_sandbox_apply(DARWIN_SANDBOX_DENY_GPU_OPEN) == ENOTSUP);
 #endif
+	puts("Native sandbox flag validation: PASS");
+	return 0;
+}

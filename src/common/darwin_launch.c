@@ -39,7 +39,10 @@
 #include <unistd.h>
 
 #include "darwin_limits.h"
+#include "darwin_sandbox.h"
 
+static bool deny_gpu;
+static bool early_applied;
 static uint64_t epilog_cpu_seconds, epilog_address_mib;
 
 #ifdef __APPLE__
@@ -128,6 +131,29 @@ extern bool darwin_launch_configured(void)
 #endif
 }
 
+extern void darwin_launch_prepare_gpu(bool deny_fresh_connections)
+{
+	deny_gpu = deny_fresh_connections;
+	early_applied = false;
+}
+
+extern bool darwin_launch_gpu_denied(void)
+{
+	return deny_gpu;
+}
+
+extern int darwin_launch_apply_early(void)
+{
+	int rc;
+
+	if (!deny_gpu || early_applied)
+		return 0;
+	rc = darwin_sandbox_apply(DARWIN_SANDBOX_DENY_GPU_OPEN);
+	if (!rc)
+		early_applied = true;
+	return rc;
+}
+
 extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
 					 uint64_t address_mib)
 {
@@ -137,6 +163,10 @@ extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
 
 extern int darwin_launch_apply_epilog(void)
 {
+	int rc = darwin_launch_apply_early();
+
+	if (rc)
+		return rc;
 	return darwin_limits_apply(epilog_cpu_seconds, epilog_address_mib);
 }
 

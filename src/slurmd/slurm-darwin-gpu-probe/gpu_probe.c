@@ -1,5 +1,5 @@
 /*****************************************************************************\
- *  darwin_launch.h - native macOS launch/resource controls.
+ *  gpu_probe.c - qualify the native GPU connection policy.
  *****************************************************************************
  *
  *  This file is part of Slurm, a resource management program.
@@ -32,33 +32,42 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
 \*****************************************************************************/
 
-#ifndef _DARWIN_LAUNCH_H
-#define _DARWIN_LAUNCH_H
+#include "config.h"
 
-#include <stdbool.h>
-#include <stdint.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
-/* Internal task-child state; never populated from a workload environment. */
-/* All helpers return zero or an errno value. Zero MiB disables the policy. */
-extern int darwin_launch_probe(uint64_t initial_image_mib);
-extern int darwin_launch_prepare(uint64_t initial_image_mib);
-extern bool darwin_launch_configured(void);
-/* Set in the parent from the authenticated local allocation, before fork. */
-extern void darwin_launch_prepare_gpu(bool deny_fresh_connections);
-extern bool darwin_launch_gpu_denied(void);
-/* Task child only, before runtime/MPI/SPANK/prolog or GPU acquisition. */
-extern int darwin_launch_apply_early(void);
-/* Store validated per-process ceilings in the parent, without applying them. */
-extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
-					 uint64_t address_mib);
-/* Epilog child only, before exec; does not prepare an initial-image limit. */
-extern int darwin_launch_apply_epilog(void);
-/*
- * Replaces this process, preserving PID and the existing stepd wait contract.
- * Only returns an errno on failure. The footprint policy covers this image:
- * ordinary exec and fork can reset it. It is not a process-tree RAM budget.
- */
-extern int darwin_launch_exec(const char *path, char *const argv[],
-			      char *const env[]);
+#include "src/common/darwin_sandbox.h"
 
+#ifndef DARWIN_METAL_PROBE_PATH
+#error "DARWIN_METAL_PROBE_PATH must name the installed trusted worker"
 #endif
+
+int main(int argc, char **argv)
+{
+	int deny, rc;
+	char *clean_env[] = { "PATH=/usr/bin:/bin", NULL };
+	char *worker_argv[] = { DARWIN_METAL_PROBE_PATH, NULL, NULL };
+
+	if ((argc != 2) ||
+	    (strcmp(argv[1], "--baseline") && strcmp(argv[1], "--deny"))) {
+		fprintf(stderr, "Usage: %s --baseline|--deny\n", argv[0]);
+		return 2;
+	}
+	deny = !strcmp(argv[1], "--deny");
+	/* The alarm survives exec; the caller also imposes a command deadline. */
+	alarm(90);
+	if (deny && (rc = darwin_sandbox_apply(DARWIN_SANDBOX_DENY_GPU_OPEN))) {
+		fprintf(stderr, "GPU sandbox installation failed: %s\n",
+			strerror(rc));
+		return 1;
+	}
+	/* Metal and its initializers load only after the policy decision. */
+	worker_argv[1] = deny ? "--expect-denied" : "--expect-allowed";
+	execve(worker_argv[0], worker_argv, clean_env);
+	fprintf(stderr, "Cannot execute trusted Metal probe %s: %s\n",
+		worker_argv[0], strerror(errno));
+	return 1;
+}

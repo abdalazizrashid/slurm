@@ -47,6 +47,27 @@ affinity. Frequency requests report <code>GpuFreq=control_disabled</code>.
 MPS and shard GRES configuration is rejected; MIG and driver-level GPU
 partitioning are unavailable.</p>
 
+<h2>Optional denial of unallocated GPU connections</h2>
+<p>With <code>TaskPlugin=task/darwin</code>, administrators can set
+<code>DenyUnallocatedGPUConnections=yes</code> in <code>darwin.conf</code>.
+This is disabled by default. It denies new direct GPU connections for local
+tasks whose authenticated job or step allocation has no GPU. GPU-allocated
+steps can still access all devices; per-task binding remains advisory.</p>
+<p>The policy uses the deprecated/private Seatbelt profile interface. Enabling
+it requires the installed <code>slurm-darwin-gpu-probe</code> to demonstrate both
+successful Metal computation without the policy and denied direct device
+acquisition with it. Repeat this check after OS or GPU changes.</p>
+<p>An empty remote SPANK stack is required for every step, including steps
+allocated GPUs. Optional and included plugin records are also rejected before
+loading. The restriction applies before task prologs and runtime initialization,
+and survives fork and exec. Task epilogs install the same policy before their
+executable or loader runs. Existing or inherited GPU capabilities remain
+usable, and outside IPC brokers can still perform GPU work. This does not
+provide selective-device authorization, GPU memory or time quotas, or complete
+device isolation.</p>
+<p>See <a href="darwin.conf.html">darwin.conf(5)</a> for configuration and
+<code>contribs/macos/gpu-access.md</code> for deployment requirements.</p>
+
 <h2>Memory and accounting</h2>
 <p>Unified memory is shared with the CPU. The working-set recommendation is a
 performance guideline, not dedicated VRAM, an allocation, or an enforced limit.

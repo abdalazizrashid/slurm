@@ -317,6 +317,14 @@ extern void exec_task(int local_proc_id)
 	int saved_errno, status;
 	uint32_t node_offset = 0, task_offset = 0;
 
+#ifdef __APPLE__
+	/* The parent derives this policy from the authenticated local GRES. */
+	if ((saved_errno = darwin_launch_apply_early())) {
+		error("Cannot apply native task access policy: %s",
+		      slurm_strerror(saved_errno));
+		_exit(1);
+	}
+#endif
 	runtime_g_task_init(conf, step, task);
 
 	if (step->het_job_node_offset != NO_VAL)

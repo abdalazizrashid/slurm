@@ -78,6 +78,13 @@ struct spank_launcher_job_info {
 
 int spank_init(stepd_step_rec_t *step);
 
+/*
+ * Set before remote stack initialization. Reject configured remote plugins
+ * before loading their code, for task policies incompatible with early hooks.
+ * Includes are parsed normally; even optional plugin entries are rejected.
+ */
+extern void spank_require_empty_remote_stack(bool required);
+
 int spank_slurmd_init (void);
 
 int spank_job_prolog(uint32_t jobid, uid_t uid, gid_t gid);

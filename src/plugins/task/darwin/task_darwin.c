@@ -37,13 +37,18 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #include "src/common/darwin_launch.h"
 #include "src/common/darwin_limits.h"
+#include "src/common/env.h"
 #include "src/common/parse_config.h"
 #include "src/common/read_config.h"
+#include "src/common/run_command.h"
+#include "src/common/spank.h"
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
+#include "src/interfaces/gres.h"
 #include "src/interfaces/runtime.h"
 #include "src/interfaces/task.h"
 
@@ -52,6 +57,139 @@ const char plugin_type[] = "task/darwin";
 const uint32_t plugin_version = SLURM_VERSION_NUMBER;
 
 static uint64_t cpu_seconds, address_mib, footprint_mib;
+static bool deny_unallocated_gpu;
+
+static int _qualify_gpu(void)
+{
+#if defined(HAVE_METAL) && defined(HAVE_SANDBOX_INIT) && \
+	defined(DARWIN_GPU_PROBE_PATH)
+	const char *modes[] = { "--baseline", "--deny" };
+	char *env[] = { "PATH=/usr/bin:/bin", NULL };
+
+	for (unsigned i = 0; i < 2; i++) {
+		int status = -1;
+		bool timed_out = false;
+		char *argv[] = { DARWIN_GPU_PROBE_PATH, (char *) modes[i],
+				 NULL };
+		run_command_args_t args = {
+			.direct_exec = true,
+			.env = env,
+			.max_wait = 120000,
+			.script_path = DARWIN_GPU_PROBE_PATH,
+			.script_argv = argv,
+			.script_type = "native GPU qualification",
+			.status = &status,
+			.timed_out = &timed_out,
+		};
+		char *output = run_command(&args);
+
+		if (timed_out || !WIFEXITED(status) || WEXITSTATUS(status)) {
+			error("Native GPU qualification %s failed (status=%d timeout=%d): %s",
+			      modes[i], status, timed_out, output ? output : "");
+			xfree(output);
+			return ENOTSUP;
+		}
+		xfree(output);
+	}
+	return 0;
+#else
+	return ENOTSUP;
+#endif
+}
+
+/* get_cred_gres() extracts exactly one local node from the signed credential. */
+static int _local_gpu_count(stepd_step_rec_t *step, uint64_t *count)
+{
+	/* Match task/cgroup's job-device scope for these special steps. */
+	bool job_scope = step->batch ||
+			 step->step_id.step_id == SLURM_BATCH_SCRIPT ||
+			 step->step_id.step_id == SLURM_EXTERN_CONT ||
+			 step->step_id.step_id == SLURM_INTERACTIVE_STEP ||
+			 (step->flags & LAUNCH_EXT_LAUNCHER);
+	list_t *list = job_scope ? step->job_gres_list : step->step_gres_list;
+	list_itr_t *iter;
+	gres_state_t *state;
+	uint32_t gpu_id = gres_build_id("gpu");
+	int rc = 0;
+
+	*count = 0;
+	if (!list)
+		return 0;
+	iter = list_iterator_create(list);
+	while ((state = list_next(iter))) {
+		uint64_t local;
+		uint32_t nodes;
+		uint64_t *counts;
+		bitstr_t **bits;
+
+		if (state->plugin_id != gpu_id)
+			continue;
+		if (!state->gres_data) {
+			rc = EINVAL;
+			break;
+		}
+		if (job_scope && state->state_type == GRES_STATE_TYPE_JOB) {
+			gres_job_state_t *job = state->gres_data;
+			nodes = job->node_cnt;
+			counts = job->gres_cnt_node_alloc;
+			bits = job->gres_bit_alloc;
+		} else if (!job_scope &&
+			   state->state_type == GRES_STATE_TYPE_STEP) {
+			gres_step_state_t *allocation = state->gres_data;
+			nodes = allocation->node_cnt;
+			counts = allocation->gres_cnt_node_alloc;
+			bits = allocation->gres_bit_alloc;
+		} else {
+			rc = EINVAL;
+			break;
+		}
+		if (nodes != 1 || !counts) {
+			rc = EINVAL;
+			break;
+		}
+		local = counts[0];
+		/* Unknown/infinite counts are not GPU authorization. */
+		if (local >= NO_VAL64 || UINT64_MAX - *count < local ||
+		    (bits && bits[0] &&
+		     (uint64_t) bit_set_count(bits[0]) != local)) {
+			rc = EINVAL;
+			break;
+		}
+		*count += local;
+	}
+	list_iterator_destroy(iter);
+	return rc;
+}
+
+static int _prepare_gpu(stepd_step_rec_t *step)
+{
+	uint64_t count;
+	char **names = NULL;
+	size_t plugins;
+	int rc;
+
+	darwin_launch_prepare_gpu(false);
+	if (!deny_unallocated_gpu)
+		return SLURM_SUCCESS;
+	if ((rc = _local_gpu_count(step, &count))) {
+		error("Cannot determine authenticated local GPU allocation: %s",
+		      slurm_strerror(rc));
+		errno = rc;
+		return SLURM_ERROR;
+	}
+	if (count)
+		return SLURM_SUCCESS;
+	/* These hooks may run user code before the task-child sandbox boundary. */
+	plugins = spank_get_plugin_names(&names);
+	env_array_free(names);
+	if (plugins) {
+		error("DenyUnallocatedGPUConnections cannot restrict a zero-GPU step with a SPANK stack; early SPANK hooks precede the task sandbox");
+		errno = ENOTSUP;
+		return SLURM_ERROR;
+	}
+	darwin_launch_prepare_gpu(true);
+	return SLURM_SUCCESS;
+}
 
 static int _unsupported(cpu_bind_type_t cpu, mem_bind_type_t mem, uint32_t min,
 			uint32_t max, uint32_t gov, const char *tres_freq,
@@ -88,6 +226,7 @@ extern int init(void)
 		{ "PerProcessCPUTimeSeconds", S_P_UINT64 },
 		{ "PerProcessAddressSpaceMiB", S_P_UINT64 },
 		{ "InitialTaskImageFootprintMiB", S_P_UINT64 },
+		{ "DenyUnallocatedGPUConnections", S_P_BOOLEAN },
 		{ NULL }
 	};
 	s_p_hashtbl_t *table = s_p_hashtbl_create(options);
@@ -96,6 +235,8 @@ extern int init(void)
 	int rc = SLURM_ERROR, native_rc, saved_errno;
 
 	cpu_seconds = address_mib = footprint_mib = 0;
+	deny_unallocated_gpu = false;
+	spank_require_empty_remote_stack(false);
 	/* Invalid configuration must not silently disable configured limits. */
 	if (!path || stat(path, &st)) {
 		error("task/darwin requires a readable darwin.conf: %s", path);
@@ -111,6 +252,8 @@ extern int init(void)
 	s_p_get_uint64(&cpu_seconds, "PerProcessCPUTimeSeconds", table);
 	s_p_get_uint64(&address_mib, "PerProcessAddressSpaceMiB", table);
 	s_p_get_uint64(&footprint_mib, "InitialTaskImageFootprintMiB", table);
+	s_p_get_boolean(&deny_unallocated_gpu, "DenyUnallocatedGPUConnections",
+			table);
 	if (_unsupported(slurm_conf.task_plugin_param, 0, 0, 0, 0, NULL, NULL))
 		goto done;
 	/* The manager adds this default after task_p_pre_setuid() runs. */
@@ -128,6 +271,8 @@ extern int init(void)
 		darwin_limits_validate(cpu_seconds, address_mib, footprint_mib);
 	if (!native_rc && footprint_mib)
 		native_rc = darwin_launch_probe(footprint_mib);
+	if (!native_rc && deny_unallocated_gpu)
+		native_rc = _qualify_gpu();
 	if (native_rc) {
 		error("task/darwin resource configuration unavailable: %s",
 		      slurm_strerror(native_rc));
@@ -136,6 +281,8 @@ extern int init(void)
 	}
 	rc = SLURM_SUCCESS;
 	darwin_launch_prepare_limits(cpu_seconds, address_mib);
+	/* Reject remote plugin records before their constructors or hooks run. */
+	spank_require_empty_remote_stack(deny_unallocated_gpu);
 	debug("task/darwin loaded: CPU time=%"PRIu64" seconds/process, "
 	      "address space=%"PRIu64" MiB/process, "
 	      "initial task image footprint=%"PRIu64" MiB (0 disables)",
@@ -153,8 +300,11 @@ done:
 extern int fini(void)
 {
 	cpu_seconds = address_mib = footprint_mib = 0;
+	deny_unallocated_gpu = false;
+	spank_require_empty_remote_stack(false);
 	darwin_launch_prepare(0);
 	darwin_launch_prepare_limits(0, 0);
+	darwin_launch_prepare_gpu(false);
 	return SLURM_SUCCESS;
 }
 
@@ -202,6 +352,8 @@ extern int task_p_pre_setuid(stepd_step_rec_t *step)
 		return SLURM_ERROR;
 	if (_oom_supported(step->oom_kill_step, step->step_id.step_id, NULL))
 		return SLURM_ERROR;
+	if (_prepare_gpu(step))
+		return SLURM_ERROR;
 	return _unsupported(step->cpu_bind_type, step->mem_bind_type,
 			    step->cpu_freq_min, step->cpu_freq_max,
 			    step->cpu_freq_gov, step->tres_freq, NULL);
@@ -248,7 +400,8 @@ extern int task_p_post_step(stepd_step_rec_t *step)
 extern int task_p_add_pid(pid_t pid)
 {
 	/* Public rlimits cannot be imposed remotely on an adopted process. */
-	if (cpu_seconds || address_mib || footprint_mib) {
+	if (cpu_seconds || address_mib || footprint_mib ||
+	    deny_unallocated_gpu) {
 		error("task/darwin cannot apply configured launch limits to an adopted process");
 		errno = ENOTSUP;
 		return SLURM_ERROR;

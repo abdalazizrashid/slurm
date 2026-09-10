@@ -30,6 +30,8 @@ libcommon_la_SOURCES =				\
 	darwin_launch.h				\
 	darwin_limits.c				\
 	darwin_limits.h				\
+	darwin_sandbox.c				\
+	darwin_sandbox.h				\
 	data.c					\
 	data.h					\
 	duplex_relay.c				\

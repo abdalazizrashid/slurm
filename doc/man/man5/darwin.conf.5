@@ -66,6 +66,39 @@ exceed the limit before termination. Run the bounded child tests on the
 deployment OS to check enforcement of this private API.
 .IP
 
+.TP
+\fBDenyUnallocatedGPUConnections\fR
+Denies new direct GPU connections for a task whose
+authenticated local Slurm job or step allocation has no GPU.
+Accepts \fByes\fR or \fBno\fR; the default is \fBno\fR.
+GPU-allocated steps can access all devices; per-task binding remains advisory.
+.IP
+Enabling the policy requires the installed Metal qualification helpers.
+Actual Metal computation must succeed without the policy, and fresh direct
+device acquisition must fail with it. Missing helpers, unavailable GPUs,
+ineffective driver rules and probe failures reject configuration.
+Qualification runs at each task-plugin initialization, including each new step
+daemon. Even a zero-GPU step requires a successful baseline computation.
+The baseline and denial probes each have a 120-second deadline; a delayed or
+unavailable GPU can therefore delay or reject step startup.
+Drain jobs and repeat qualification after OS or GPU topology changes.
+.IP
+The policy uses the deprecated/private Seatbelt profile interface and applies
+before task prologs, runtime/MPI initialization and the final image's loader.
+User and administrator task epilogs install the same allocation-derived policy
+before their executable or loader runs.
+An empty remote SPANK stack is required for every step, including GPU-allocated
+steps. Plugin records, including optional and included records, are rejected
+before their code loads. The policy survives ordinary fork and exec.
+.IP
+Existing or inherited GPU rights are not revoked. Outside IPC brokers can still
+perform GPU work, and Mach rights or shared-resource transfers require a
+separate policy. This option does not provide complete GPU isolation or GPU time
+or memory quotas, and does not restrict applications outside Slurm.
+Installed helpers, libraries and configuration must be administrator controlled.
+See \fIcontribs/macos/gpu-access.md\fR for deployment requirements.
+.IP
+
 .SH "LIMITATIONS"
 \fBtask/darwin\fR rejects explicit CPU/NUMA binding masks, CPU/GPU frequency
 controls, \fBTaskPluginParam=OOMKillStep\fR and a running job's aggregate
@@ -90,6 +123,7 @@ In \fBdarwin.conf\fR:
 PerProcessCPUTimeSeconds=3600
 PerProcessAddressSpaceMiB=0
 InitialTaskImageFootprintMiB=0
+DenyUnallocatedGPUConnections=no
 .fi
 .LP
 This example limits each process to 3600 CPU seconds. The other policies remain

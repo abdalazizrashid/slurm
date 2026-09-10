@@ -13,12 +13,15 @@ LDADD = -ldl -lpthread $(LIB_SLURM)
 check_PROGRAMS = \
 	$(TESTS)
 
-TESTS = auth-fork-test \
+TESTS = \
+	auth-fork-test \
 	scontrol-job-id-test \
 	fd-test \
 	rlimits-test \
 	parse-config-read-test \
+	darwin-sandbox-test \
 	runtime-kind-test \
+	spank-policy-test \
 	stepd-inventory-test \
 	fetch_config-test \
 	conmgr-delay-test \
@@ -50,9 +53,13 @@ TESTS += darwin-proc-test darwin-pgid-test darwin-limits-test \
 # of libtool's temporary library search path and an older installed Slurm.
 darwin_launch_test_SOURCES = darwin-launch-test.c \
 	$(top_srcdir)/src/common/darwin_launch.c \
-	$(top_srcdir)/src/common/darwin_limits.c
+	$(top_srcdir)/src/common/darwin_limits.c \
+	$(top_srcdir)/src/common/darwin_sandbox.c
 darwin_launch_test_LDADD = -ldl
 if BUILD_METAL
+TESTS += darwin-gpu-sandbox-test
+darwin_gpu_sandbox_test_CPPFLAGS = $(AM_CPPFLAGS) \
+	-DDARWIN_METAL_PROBE_TEST_PATH=\"$(abs_top_builddir)/src/slurmd/slurm-darwin-gpu-probe/slurm-darwin-metal-probe\"
 endif
 topology_load_test_CPPFLAGS = $(AM_CPPFLAGS) \
 	-DTOPOLOGY_BUILD_DIR='"$(abs_top_builddir)/src/plugins/topology"'

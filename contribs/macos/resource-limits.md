@@ -19,11 +19,13 @@ DefRuntimePlugin=none
 PerProcessCPUTimeSeconds=3600
 PerProcessAddressSpaceMiB=0
 InitialTaskImageFootprintMiB=0
+DenyUnallocatedGPUConnections=no
 ```
 
 This limits each process to 3600 CPU seconds and leaves the other policies
 disabled. Hard aggregate CPU/RAM quotas and complete device isolation are
-unavailable.
+unavailable. For the narrower
+GPU connection policy, see [gpu-access.md](gpu-access.md).
 
 ## Per-process limits
 

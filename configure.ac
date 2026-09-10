@@ -136,7 +136,7 @@ AC_CHECK_HEADERS(mcheck.h values.h socket.h sys/socket.h  \
 		 pty.h util.h utmp.h \
 		 sys/syslog.h linux/sched.h \
 		 kstat.h paths.h limits.h sys/statfs.h sys/ptrace.h \
-		 float.h sys/statvfs.h sys/event.h libproc.h mach/mach.h
+		 float.h sys/statvfs.h sys/event.h libproc.h mach/mach.h sandbox.h
 		)
 AC_HEADER_SYS_WAIT
 
@@ -219,6 +219,7 @@ AC_CHECK_FUNCS( \
    accept4 \
    fdatasync \
    fexecve \
+   sandbox_init \
    mkostemp \
    hstrerror \
    strerror  \
@@ -651,6 +652,7 @@ AC_CONFIG_FILES([Makefile
 		 src/slurmctld/Makefile
 		 src/slurmd/Makefile
 		 src/slurmd/common/Makefile
+		 src/slurmd/slurm-darwin-gpu-probe/Makefile
 		 src/slurmd/slurmd/Makefile
 		 src/slurmd/slurmstepd/Makefile
 		 src/slurmdbd/Makefile

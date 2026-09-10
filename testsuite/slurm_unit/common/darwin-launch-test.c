@@ -32,6 +32,7 @@ static int _fake_destroy(posix_spawnattr_t *);
 static int _fake_spawn(pid_t *, const char *,
 		       const posix_spawn_file_actions_t *,
 		       const posix_spawnattr_t *, char *const[], char *const[]);
+static int _fake_sandbox_apply(unsigned);
 #define dlsym _fake_dlsym
 #define sysctlbyname _fake_sysctl
 #define posix_spawnattr_init _fake_init
@@ -42,11 +43,19 @@ static int _fake_spawn(pid_t *, const char *,
 #define darwin_launch_prepare fake_launch_prepare
 #define darwin_launch_configured fake_launch_configured
 #define darwin_launch_exec fake_launch_exec
+#define darwin_launch_prepare_gpu fake_launch_prepare_gpu
+#define darwin_launch_gpu_denied fake_launch_gpu_denied
+#define darwin_launch_apply_early fake_launch_apply_early
 #define darwin_launch_prepare_limits fake_launch_prepare_limits
 #define darwin_launch_apply_epilog fake_launch_apply_epilog
+#define darwin_sandbox_apply _fake_sandbox_apply
 #include "src/common/darwin_launch.c"
+#undef darwin_sandbox_apply
 #undef darwin_launch_apply_epilog
 #undef darwin_launch_prepare_limits
+#undef darwin_launch_apply_early
+#undef darwin_launch_gpu_denied
+#undef darwin_launch_prepare_gpu
 #undef darwin_launch_exec
 #undef darwin_launch_configured
 #undef darwin_launch_prepare
@@ -70,17 +79,32 @@ enum fault {
 };
 static enum fault fault;
 static unsigned initialized, destroyed, spawned;
+static unsigned sandbox_calls;
+static int sandbox_error;
+
+static int _fake_sandbox_apply(unsigned policy)
+{
+	assert(policy == DARWIN_SANDBOX_DENY_GPU_OPEN);
+	sandbox_calls++;
+	return sandbox_error;
+}
 
 static void _epilog_failures(void)
 {
 	assert(!fake_launch_configured());
+	fake_launch_prepare_gpu(true);
 	fake_launch_prepare_limits(UINT64_MAX, 0);
+	sandbox_error = EACCES;
+	assert(fake_launch_apply_epilog() == EACCES);
+	assert(sandbox_calls == 1);
+	sandbox_error = 0;
 	assert(fake_launch_apply_epilog() == EOVERFLOW);
-	fake_launch_prepare_limits(0, UINT64_MAX);
-	assert(fake_launch_apply_epilog() == EOVERFLOW);
+	assert(sandbox_calls == 2);
 	fake_launch_prepare_limits(0, 0);
 	assert(!fake_launch_apply_epilog());
+	assert(sandbox_calls == 2);
 	assert(!fake_launch_configured());
+	fake_launch_prepare_gpu(false);
 }
 
 static int _fake_jetsam(posix_spawnattr_t *attr, short flags, int priority,

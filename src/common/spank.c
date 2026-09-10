@@ -433,6 +433,13 @@ _spank_plugin_find (const char *path, const char *file)
 static int _spank_conf_include (struct spank_stack *,
 	const char *, int, const char *);
 
+static bool require_empty_remote_stack;
+
+extern void spank_require_empty_remote_stack(bool required)
+{
+	require_empty_remote_stack = required;
+}
+
 static int
 spank_stack_plugin_valid_for_context (struct spank_stack *stack,
 	struct spank_plugin *p)
@@ -503,6 +510,17 @@ _spank_stack_process_line(struct spank_stack *stack,
 
 	if (path == NULL)	/* No plugin listed on this line */
 		return (0);
+
+	if ((stack->type == S_TYPE_REMOTE) && require_empty_remote_stack) {
+		error("spank: %s:%d: remote plugins are incompatible with the configured task access policy",
+		      file, line);
+		xfree(path);
+		for (int i = 0; i < ac; i++)
+			xfree(argv[i]);
+		xfree(argv);
+		errno = ENOTSUP;
+		return -1;
+	}
 
 	if (path[0] != '/') {
 		char *f;

@@ -11,4 +11,9 @@
 # Later ordinary exec and fork can reset this cap; no shared job budget.
 # InitialTaskImageFootprintMiB=0
 #
+# Qualify the installed fixed Metal probe, then deny fresh direct GPU opens
+# to tasks with no local authenticated GPU allocation. Not per-device binding.
+# This option requires an empty remote SPANK stack for every step.
+# DenyUnallocatedGPUConnections=no
+#
 # Hard aggregate CPU/RAM quotas and complete device isolation are unavailable.

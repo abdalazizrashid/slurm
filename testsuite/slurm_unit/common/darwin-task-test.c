@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <check.h>
 #include <errno.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "config.h"
@@ -9,13 +8,33 @@
 
 static void _destroy_configuration(s_p_hashtbl_t *table);
 
+/* Qualification is injected here; real Metal execution has its own test. */
+#ifndef HAVE_METAL
+#define HAVE_METAL 1
+#endif
+#ifndef HAVE_SANDBOX_INIT
+#define HAVE_SANDBOX_INIT 1
+#endif
+#ifdef DARWIN_GPU_PROBE_PATH
+#undef DARWIN_GPU_PROBE_PATH
+#endif
+#define DARWIN_GPU_PROBE_PATH "/test-only/slurm-darwin-gpu-probe"
 #define s_p_hashtbl_destroy _destroy_configuration
+#define run_command test_run_command
+#define spank_get_plugin_names test_spank_names
+#define spank_require_empty_remote_stack test_require_empty_stack
 #define runtime_g_is_none test_runtime_g_is_none
 #include "src/plugins/task/darwin/task_darwin.c"
 #undef runtime_g_is_none
+#undef spank_get_plugin_names
+#undef spank_require_empty_remote_stack
+#undef run_command
 #undef s_p_hashtbl_destroy
 
 static bool runtime_none = true;
+static bool spank_loaded;
+static bool require_empty_stack;
+static unsigned qualification_calls, qualification_failure;
 static bool clobber_cleanup_errno;
 static unsigned configuration_cleanups;
 
@@ -25,6 +44,35 @@ static void _destroy_configuration(s_p_hashtbl_t *table)
 	configuration_cleanups++;
 	if (clobber_cleanup_errno)
 		errno = EBUSY;
+}
+
+extern void test_require_empty_stack(bool required)
+{
+	require_empty_stack = required;
+}
+
+extern char *test_run_command(run_command_args_t *args)
+{
+	qualification_calls++;
+	ck_assert(args->direct_exec);
+	ck_assert_str_eq(args->script_path, DARWIN_GPU_PROBE_PATH);
+	ck_assert_str_eq(args->env[0], "PATH=/usr/bin:/bin");
+	ck_assert_ptr_null(args->env[1]);
+	ck_assert_int_eq(args->max_wait, 120000);
+	ck_assert_str_eq(args->script_argv[1],
+			 qualification_calls == 1 ? "--baseline" : "--deny");
+	*args->status = qualification_failure == qualification_calls ? 256 : 0;
+	*args->timed_out = false;
+	return xstrdup("mock qualification");
+}
+
+extern size_t test_spank_names(char ***names)
+{
+	if (!spank_loaded)
+		return 0;
+	*names = xcalloc(2, sizeof(char *));
+	(*names)[0] = xstrdup("test-early-hook");
+	return 1;
 }
 
 extern bool test_runtime_g_is_none(void)
@@ -51,6 +99,9 @@ static void _setup(void)
 	xfree(path);
 	slurm_conf.task_plugin_param = 0;
 	runtime_none = true;
+	spank_loaded = false;
+	qualification_calls = qualification_failure = 0;
+	require_empty_stack = false;
 	clobber_cleanup_errno = false;
 	configuration_cleanups = 0;
 }
@@ -117,6 +168,7 @@ START_TEST(test_nonregular_configuration)
 	saved_errno = errno;
 	ck_assert_int_eq(rc, SLURM_ERROR);
 	ck_assert_int_eq(saved_errno, EINVAL);
+	ck_assert_uint_eq(qualification_calls, 0);
 	ck_assert_int_eq(rmdir(path), 0);
 	/* Nonregular files must fail before a blocking parser open. */
 	ck_assert_int_eq(mkfifo(path, 0600), 0);
@@ -124,6 +176,7 @@ START_TEST(test_nonregular_configuration)
 	saved_errno = errno;
 	ck_assert_int_eq(rc, SLURM_ERROR);
 	ck_assert_int_eq(saved_errno, EINVAL);
+	ck_assert_uint_eq(qualification_calls, 0);
 	ck_assert_int_eq(unlink(path), 0);
 	xfree(path);
 }
@@ -216,6 +269,7 @@ START_TEST(test_gpu_frequency_default_rejection)
 	saved_errno = errno;
 	ck_assert_int_eq(rc, SLURM_ERROR);
 	ck_assert_int_eq(saved_errno, ENOTSUP);
+	ck_assert_uint_eq(qualification_calls, 0);
 	/* An absent or empty default does not request frequency control. */
 	slurm_conf.gpu_freq_def = "";
 	ck_assert_int_eq(init(), SLURM_SUCCESS);
@@ -232,14 +286,16 @@ START_TEST(test_initialization_error_survives_cleanup)
 		const char *configuration;
 		uint32_t task_parameters;
 		char *gpu_frequency;
+		unsigned failed_qualification;
 		int expected_errno;
 	} cases[] = {
-		{ "# No optional controls\n", 0, "high", ENOTSUP },
-		{ "# No optional controls\n", CPU_BIND_MASK, NULL, ENOTSUP },
-		{ "# No optional controls\n", OOM_KILL_STEP, NULL, ENOTSUP },
-		{ "UnrecognizedOption=1\n", 0, NULL, EINVAL },
-		{ "PerProcessCPUTimeSeconds=18446744073709551615\n", 0, NULL,
+		{ "# No optional controls\n", 0, "high", 0, ENOTSUP },
+		{ "# No optional controls\n", CPU_BIND_MASK, NULL, 0, ENOTSUP },
+		{ "# No optional controls\n", OOM_KILL_STEP, NULL, 0, ENOTSUP },
+		{ "UnrecognizedOption=1\n", 0, NULL, 0, EINVAL },
+		{ "PerProcessCPUTimeSeconds=18446744073709551615\n", 0, NULL, 0,
 		  EOVERFLOW },
+		{ "DenyUnallocatedGPUConnections=yes\n", 0, NULL, 1, ENOTSUP },
 	};
 
 	char *saved_gpu_frequency = slurm_conf.gpu_freq_def;
@@ -248,6 +304,7 @@ START_TEST(test_initialization_error_survives_cleanup)
 	_write_conf(cases[_i].configuration);
 	slurm_conf.task_plugin_param = cases[_i].task_parameters;
 	slurm_conf.gpu_freq_def = cases[_i].gpu_frequency;
+	qualification_failure = cases[_i].failed_qualification;
 	clobber_cleanup_errno = true;
 	rc = init();
 	saved_errno = errno;
@@ -316,6 +373,135 @@ START_TEST(test_oom_step_policy_rejection)
 	ck_assert_ptr_null(message);
 	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
 	ck_assert_int_eq(task_p_pre_launch_priv(&record, 0, 0), SLURM_SUCCESS);
+}
+
+END_TEST
+
+START_TEST(test_gpu_qualification_failures)
+{
+	_write_conf("DenyUnallocatedGPUConnections=yes\n");
+	qualification_failure = 1;
+	ck_assert_int_eq(init(), SLURM_ERROR);
+	ck_assert_uint_eq(qualification_calls, 1);
+	ck_assert(!require_empty_stack);
+	qualification_calls = 0;
+	qualification_failure = 2;
+	ck_assert_int_eq(init(), SLURM_ERROR);
+	ck_assert_uint_eq(qualification_calls, 2);
+	qualification_calls = qualification_failure = 0;
+	ck_assert_int_eq(init(), SLURM_SUCCESS);
+	ck_assert_uint_eq(qualification_calls, 2);
+	ck_assert(require_empty_stack);
+}
+
+END_TEST
+
+START_TEST(test_authenticated_local_gpu_policy)
+{
+	stepd_step_rec_t record = { 0 };
+	uint64_t count = 1, measured;
+	gres_step_state_t allocation = { .node_cnt = 1,
+					 .gres_cnt_node_alloc = &count };
+	gres_job_state_t job = { .node_cnt = 1, .gres_cnt_node_alloc = &count };
+	gres_state_t state = { .plugin_id = gres_build_id("gpu"),
+			       .state_type = GRES_STATE_TYPE_STEP,
+			       .gres_data = &allocation };
+	bitstr_t *bits = bit_alloc(2);
+	char *user_env[] = { "SLURM_GPUS=99",
+			     "SLURM_METAL_DEVICE_IDS=ffffffffffffffff", NULL };
+
+	_write_conf("DenyUnallocatedGPUConnections=yes\n");
+	ck_assert_int_eq(init(), SLURM_SUCCESS);
+	record.env = user_env;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(darwin_launch_gpu_denied());
+	ck_assert_int_eq(task_p_add_pid(getpid()), SLURM_ERROR);
+	spank_loaded = true;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_ERROR);
+	spank_loaded = false;
+	record.step_gres_list = list_create(NULL);
+	list_append(record.step_gres_list, &state);
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(!darwin_launch_gpu_denied());
+	count = NO_VAL64;
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), EINVAL);
+	count = 1;
+	allocation.node_cnt = 2;
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), EINVAL);
+	allocation.node_cnt = 1;
+	allocation.gres_bit_alloc = &bits;
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), EINVAL);
+	bit_set(bits, 1);
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), 0);
+	ck_assert_uint_eq(measured, 1);
+	/* A batch step uses the extracted job allocation, not the step list. */
+	record.batch = true;
+	state.state_type = GRES_STATE_TYPE_JOB;
+	state.gres_data = &job;
+	record.job_gres_list = record.step_gres_list;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(!darwin_launch_gpu_denied());
+	count = 0;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(darwin_launch_gpu_denied());
+	FREE_NULL_BITMAP(bits);
+	FREE_NULL_LIST(record.step_gres_list);
+}
+
+END_TEST
+
+START_TEST(test_gpu_special_step_allocation_scope)
+{
+	stepd_step_rec_t record = { 0 };
+	uint64_t job_count = 2, step_count = 1, measured;
+	gres_job_state_t job = { .node_cnt = 1,
+				 .gres_cnt_node_alloc = &job_count };
+	gres_step_state_t allocation = { .node_cnt = 1,
+					 .gres_cnt_node_alloc = &step_count };
+	gres_state_t job_state = { .plugin_id = gres_build_id("gpu"),
+				   .state_type = GRES_STATE_TYPE_JOB,
+				   .gres_data = &job };
+	gres_state_t step_state = { .plugin_id = gres_build_id("gpu"),
+				    .state_type = GRES_STATE_TYPE_STEP,
+				    .gres_data = &allocation };
+	const uint32_t special[] = { SLURM_BATCH_SCRIPT, SLURM_EXTERN_CONT,
+				     SLURM_INTERACTIVE_STEP };
+
+	_write_conf("DenyUnallocatedGPUConnections=yes\n");
+	ck_assert_int_eq(init(), SLURM_SUCCESS);
+	record.job_gres_list = list_create(NULL);
+	record.step_gres_list = list_create(NULL);
+	list_append(record.job_gres_list, &job_state);
+	list_append(record.step_gres_list, &step_state);
+	for (size_t i = 0; i < sizeof(special) / sizeof(special[0]); i++) {
+		record.step_id.step_id = special[i];
+		ck_assert_int_eq(_local_gpu_count(&record, &measured), 0);
+		ck_assert_uint_eq(measured, 2);
+		/* Special steps commonly have no independent step GRES allocation. */
+		step_count = 0;
+		ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+		ck_assert(!darwin_launch_gpu_denied());
+		step_count = 1;
+	}
+	record.step_id.step_id = 13;
+	record.flags = LAUNCH_EXT_LAUNCHER;
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), 0);
+	ck_assert_uint_eq(measured, 2);
+	job_count = 0;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(darwin_launch_gpu_denied());
+	/* A normal step may use only its own allocation, not every job GPU. */
+	record.flags = 0;
+	ck_assert_int_eq(_local_gpu_count(&record, &measured), 0);
+	ck_assert_uint_eq(measured, 1);
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(!darwin_launch_gpu_denied());
+	job_count = 2;
+	step_count = 0;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(darwin_launch_gpu_denied());
+	FREE_NULL_LIST(record.job_gres_list);
+	FREE_NULL_LIST(record.step_gres_list);
 }
 
 END_TEST
@@ -426,10 +612,13 @@ int main(void)
 	tcase_add_test(test, test_capability_rejection);
 	tcase_add_test(test, test_gpu_frequency_default_rejection);
 	tcase_add_loop_test(test, test_initialization_error_survives_cleanup, 0,
-			    5);
+			    6);
 	tcase_add_test(test, test_late_frequency_policy_recheck);
 	tcase_add_test(test, test_oom_step_policy_rejection);
 	tcase_add_test(test, test_initial_image_runtime_guard);
+	tcase_add_test(test, test_gpu_qualification_failures);
+	tcase_add_test(test, test_authenticated_local_gpu_policy);
+	tcase_add_test(test, test_gpu_special_step_allocation_scope);
 	tcase_add_test(test, test_propagation_preserves_native_policy_ceiling);
 	tcase_add_test(test, test_epilog_per_process_policy);
 	suite_add_tcase(suite, test);
