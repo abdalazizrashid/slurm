@@ -67,6 +67,9 @@
 #include "slurm/slurm_errno.h"
 
 #include "src/common/env.h"
+#ifdef __APPLE__
+#include "src/common/darwin_launch.h"
+#endif
 #include "src/common/fd.h"
 #include "src/common/log.h"
 #include "src/common/run_command.h"
@@ -514,8 +517,13 @@ extern void exec_task(int local_proc_id)
 
 	if (saved_errno == ESLURM_NOT_SUPPORTED) {
 		/* The runtime did not exec the task, so exec it here. */
+#ifdef __APPLE__
+		saved_errno = darwin_launch_exec(task->argv[0], task->argv,
+						 step->env);
+#else
 		execve(task->argv[0], task->argv, step->env);
 		saved_errno = errno;
+#endif
 	}
 
 	/*

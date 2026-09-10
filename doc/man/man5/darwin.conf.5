@@ -50,6 +50,22 @@ Darwin aliases \fBRLIMIT_RSS\fR to \fBRLIMIT_AS\fR; Slurm exposes AS alone
 and rejects an explicit RSS propagation request on Darwin.
 .IP
 
+.TP
+\fBInitialTaskImageFootprintMiB\fR
+Physical-footprint limit, in MiB, for the initial task executable image.
+The default is 0 (disabled); the maximum is 2147483647.
+Requires \fBDefRuntimePlugin=none\fR and \fBruntime/none\fR for the step
+so that Slurm launches the final image.
+.IP
+Private spawn attributes set fatal active and inactive limits during the final
+same-PID exec, covering the loader and initializers. For a script, the limit
+applies to the interpreter image. Later fork or exec calls can reset the limit,
+so it does not cover a task's lifetime, descendants or aggregate memory use.
+Footprint differs from RSS and virtual address space; a process may transiently
+exceed the limit before termination. Run the bounded child tests on the
+deployment OS to check enforcement of this private API.
+.IP
+
 .SH "LIMITATIONS"
 \fBtask/darwin\fR rejects explicit CPU/NUMA binding masks, CPU/GPU frequency
 controls, \fBTaskPluginParam=OOMKillStep\fR and a running job's aggregate
@@ -66,17 +82,21 @@ allocation between samples.
 In \fBslurm.conf\fR:
 .nf
 TaskPlugin=task/darwin
+DefRuntimePlugin=none
 .fi
 .LP
 In \fBdarwin.conf\fR:
 .nf
 PerProcessCPUTimeSeconds=3600
 PerProcessAddressSpaceMiB=0
+InitialTaskImageFootprintMiB=0
 .fi
 .LP
-This example limits each process to 3600 CPU seconds. The address-space limit
-remains disabled; a job's aggregate CPU use is not limited to 3600 seconds.
+This example limits each process to 3600 CPU seconds. The other policies remain
+disabled; a job's aggregate CPU use is not limited to 3600 seconds.
 
 .SH "SEE ALSO"
 \fBslurm.conf\fR(5), \fBgres.conf\fR(5), \fBsrun\fR(1),
 \fBsetrlimit\fR(2)
+.LP
+\fIhttps://slurm.schedmd.com/metal.html\fR

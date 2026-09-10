@@ -11,15 +11,17 @@ See `darwin.conf(5)` for parameter syntax, defaults and ranges. For example:
 ```ini
 # slurm.conf
 TaskPlugin=task/darwin
+DefRuntimePlugin=none
 ```
 
 ```ini
 # darwin.conf
 PerProcessCPUTimeSeconds=3600
 PerProcessAddressSpaceMiB=0
+InitialTaskImageFootprintMiB=0
 ```
 
-This limits each process to 3600 CPU seconds and leaves the address-space limit
+This limits each process to 3600 CPU seconds and leaves the other policies
 disabled. Hard aggregate CPU/RAM quotas and complete device isolation are
 unavailable.
 
@@ -41,6 +43,27 @@ per-process ceiling is not a shared job budget or CPU rate limit.
 Darwin aliases `RLIMIT_RSS` to `RLIMIT_AS`. Slurm exposes AS alone and rejects
 explicit RSS propagation. `VSizeFactor` scales the requested limit before
 comparison with the existing hard bound and preserves a stricter soft bound.
+
+## Initial-image footprint limit
+
+`InitialTaskImageFootprintMiB` uses the private `posix_spawnattr_setjetsam_ext`
+API to install fatal active/inactive footprint limits at the final
+`POSIX_SPAWN_SETEXEC`. This preserves the task PID, descriptors and step daemon's
+wait relationship. The limit covers loading the image and its initializers.
+A script's initial image is its interpreter.
+
+This option requires `DefRuntimePlugin=none` and a selected `runtime/none`
+context. Other runtimes are rejected before the child is released. Missing
+symbols, a disabled high-water switch, spawn-attribute errors and failed exec
+fail the launch. The policy is passed in process-local state, not a workload
+environment variable.
+
+Ordinary later exec and fork can reset the limit to the kernel default, even
+when exec preserves the PID. The option therefore does not limit the whole
+task lifetime or its descendants. Physical footprint differs from RSS, virtual
+address space and a reservation of shared/kernel memory. Fatal-limit delivery
+can allow transient excess. Test `darwin-launch-test` on each deployment OS;
+acceptance of private spawn attributes alone does not establish enforcement.
 
 ## Accounting and unsupported operations
 
@@ -64,8 +87,13 @@ The node retains it until the job disappears from the step inventory.
 Process-discovery and ownership gaps can also suppress affected checks, as
 described in the process-tracking guide.
 
-## Tests
+## Tests and API references
 
 `darwin-limits-test` exercises CPU/address-space limits and inheritance.
-`darwin-task-test` covers configuration and unsupported-control checks.
-`job-mem-limit-test` covers incomplete node samples and recovery.
+`darwin-launch-test` checks bounded child allocations and fork, exec and shell
+transitions; it needs no root. `darwin-task-test` covers configuration and
+runtime checks. `job-mem-limit-test` covers incomplete node samples and recovery.
+
+The private footprint interface needs testing on each OS and architecture.
+Implementation references: XNU [spawn attributes](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/libsyscall/wrappers/spawn/posix_spawn.c)
+and [exec handling](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exec.c).

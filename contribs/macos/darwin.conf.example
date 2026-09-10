@@ -6,4 +6,9 @@
 # PerProcessCPUTimeSeconds=0
 # PerProcessAddressSpaceMiB=0
 #
+# Private Darwin API: initial executable-image footprint, MiB.
+# Requires actual runtime/none (set DefRuntimePlugin=none in slurm.conf).
+# Later ordinary exec and fork can reset this cap; no shared job budget.
+# InitialTaskImageFootprintMiB=0
+#
 # Hard aggregate CPU/RAM quotas and complete device isolation are unavailable.

@@ -10,9 +10,12 @@
 static void _destroy_configuration(s_p_hashtbl_t *table);
 
 #define s_p_hashtbl_destroy _destroy_configuration
+#define runtime_g_is_none test_runtime_g_is_none
 #include "src/plugins/task/darwin/task_darwin.c"
+#undef runtime_g_is_none
 #undef s_p_hashtbl_destroy
 
+static bool runtime_none = true;
 static bool clobber_cleanup_errno;
 static unsigned configuration_cleanups;
 
@@ -22,6 +25,11 @@ static void _destroy_configuration(s_p_hashtbl_t *table)
 	configuration_cleanups++;
 	if (clobber_cleanup_errno)
 		errno = EBUSY;
+}
+
+extern bool test_runtime_g_is_none(void)
+{
+	return runtime_none;
 }
 
 #include "src/slurmd/slurmstepd/ulimits.c"
@@ -42,6 +50,7 @@ static void _setup(void)
 	ck_assert_int_eq(setenv("SLURM_CONF", path, 1), 0);
 	xfree(path);
 	slurm_conf.task_plugin_param = 0;
+	runtime_none = true;
 	clobber_cleanup_errno = false;
 	configuration_cleanups = 0;
 }
@@ -77,6 +86,7 @@ START_TEST(test_required_configuration)
 	ck_assert_int_eq(init(), SLURM_SUCCESS);
 	ck_assert_uint_eq(cpu_seconds, 0);
 	ck_assert_uint_eq(address_mib, 0);
+	ck_assert_uint_eq(footprint_mib, 0);
 }
 
 END_TEST
@@ -86,6 +96,7 @@ START_TEST(test_invalid_configuration)
 	const char *invalid[] = {
 		"PerProcessCPUTimeSeconds=bad\n",
 		"PerProcessAddressSpaceMiB=18446744073709551615\n",
+		"InitialTaskImageFootprintMiB=2147483648\n",
 		"UnrecognizedOption=1\n",
 	};
 	for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
@@ -146,6 +157,29 @@ START_TEST(test_limits_configuration)
 	ck_assert_uint_eq(cpu_seconds, 60);
 	ck_assert_uint_eq(address_mib, 1048576);
 	ck_assert_int_eq(task_p_add_pid(getpid()), SLURM_ERROR);
+}
+
+END_TEST
+
+START_TEST(test_initial_image_runtime_guard)
+{
+	stepd_step_rec_t record = { 0 };
+
+	_write_conf("InitialTaskImageFootprintMiB=32\n");
+	ck_assert_int_eq(init(), SLURM_SUCCESS);
+	ck_assert_uint_eq(footprint_mib, 32);
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	runtime_none = false;
+	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_ERROR);
+	ck_assert_int_eq(task_p_pre_launch_priv(&record, 0, 0), SLURM_ERROR);
+	ck_assert_int_eq(task_p_add_pid(getpid()), SLURM_ERROR);
+	/* No parent-side hook installs or enables a child image policy. */
+	ck_assert(!darwin_launch_configured());
+	runtime_none = true;
+	ck_assert_int_eq(task_p_pre_launch(&record), SLURM_SUCCESS);
+	ck_assert(darwin_launch_configured());
+	ck_assert_int_eq(fini(), SLURM_SUCCESS);
+	ck_assert(!darwin_launch_configured());
 }
 
 END_TEST
@@ -333,11 +367,13 @@ START_TEST(test_epilog_per_process_policy)
 	int status;
 
 	_write_conf("PerProcessCPUTimeSeconds=60\n"
-		    "PerProcessAddressSpaceMiB=4194304\n");
+		    "PerProcessAddressSpaceMiB=4194304\n"
+		    "InitialTaskImageFootprintMiB=32\n");
 	ck_assert_int_eq(getrlimit(RLIMIT_CPU, &cpu_before), 0);
 	ck_assert_int_eq(getrlimit(RLIMIT_AS, &address_before), 0);
 	ck_assert_int_eq(init(), SLURM_SUCCESS);
 	ck_assert_int_eq(task_p_pre_setuid(&record), SLURM_SUCCESS);
+	ck_assert(!darwin_launch_configured());
 	for (int epilog = 0; epilog < 2; epilog++) {
 		child = fork();
 		ck_assert_int_ge(child, 0);
@@ -345,9 +381,11 @@ START_TEST(test_epilog_per_process_policy)
 			if (epilog) {
 				ck_assert_int_eq(darwin_launch_apply_epilog(),
 						 0);
+				ck_assert(!darwin_launch_configured());
 			} else {
 				ck_assert_int_eq(task_p_pre_launch(&record),
 						 SLURM_SUCCESS);
+				ck_assert(darwin_launch_configured());
 			}
 			ck_assert_int_eq(getrlimit(RLIMIT_CPU, &observed), 0);
 			ck_assert_uint_le(observed.rlim_cur, 60);
@@ -360,13 +398,14 @@ START_TEST(test_epilog_per_process_policy)
 		ck_assert_int_eq(waitpid(child, &status, 0), child);
 		ck_assert_int_eq(status, 0);
 	}
-	/* Neither sibling launch changes the daemon's limits. */
+	/* Neither sibling launch changes the daemon's limits or image policy. */
 	ck_assert_int_eq(getrlimit(RLIMIT_CPU, &observed), 0);
 	ck_assert_uint_eq(observed.rlim_cur, cpu_before.rlim_cur);
 	ck_assert_uint_eq(observed.rlim_max, cpu_before.rlim_max);
 	ck_assert_int_eq(getrlimit(RLIMIT_AS, &observed), 0);
 	ck_assert_uint_eq(observed.rlim_cur, address_before.rlim_cur);
 	ck_assert_uint_eq(observed.rlim_max, address_before.rlim_max);
+	ck_assert(!darwin_launch_configured());
 }
 
 END_TEST
@@ -390,6 +429,7 @@ int main(void)
 			    5);
 	tcase_add_test(test, test_late_frequency_policy_recheck);
 	tcase_add_test(test, test_oom_step_policy_rejection);
+	tcase_add_test(test, test_initial_image_runtime_guard);
 	tcase_add_test(test, test_propagation_preserves_native_policy_ceiling);
 	tcase_add_test(test, test_epilog_per_process_policy);
 	suite_add_tcase(suite, test);

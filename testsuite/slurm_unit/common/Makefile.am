@@ -18,6 +18,7 @@ TESTS = auth-fork-test \
 	fd-test \
 	rlimits-test \
 	parse-config-read-test \
+	runtime-kind-test \
 	stepd-inventory-test \
 	fetch_config-test \
 	conmgr-delay-test \

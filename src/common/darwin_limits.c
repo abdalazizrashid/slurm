@@ -35,15 +35,18 @@
 #include "darwin_limits.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
 #define MIB (UINT64_C(1024) * 1024)
 
-extern int darwin_limits_validate(uint64_t cpu_seconds, uint64_t address_mib)
+extern int darwin_limits_validate(uint64_t cpu_seconds, uint64_t address_mib,
+				  uint64_t footprint_mib)
 {
 	if ((cpu_seconds >= (uint64_t) RLIM_INFINITY) ||
-	    (address_mib > ((uint64_t) RLIM_INFINITY - 1) / MIB))
+	    (address_mib > ((uint64_t) RLIM_INFINITY - 1) / MIB) ||
+	    (footprint_mib > INT32_MAX))
 		return EOVERFLOW;
 #ifndef RLIMIT_AS
 	if (address_mib)
@@ -71,7 +74,7 @@ static int _lower_limit(int resource, rlim_t value)
 
 extern int darwin_limits_apply(uint64_t cpu_seconds, uint64_t address_mib)
 {
-	int rc = darwin_limits_validate(cpu_seconds, address_mib);
+	int rc = darwin_limits_validate(cpu_seconds, address_mib, 0);
 
 	if (rc)
 		return rc;

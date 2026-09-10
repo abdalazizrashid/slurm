@@ -141,6 +141,17 @@ extern void runtime_g_fini(void)
 	slurm_mutex_unlock(&init_lock);
 }
 
+extern bool runtime_g_is_none(void)
+{
+	bool is_none;
+
+	slurm_mutex_lock(&init_lock);
+	is_none = (plugin_inited == PLUGIN_INITED) && g_context &&
+		  !xstrcmp(g_context->type, "runtime/none");
+	slurm_mutex_unlock(&init_lock);
+	return is_none;
+}
+
 extern int runtime_g_setup(slurmd_conf_t *conf, stepd_step_rec_t *step,
 			   slurm_addr_t *cli, slurm_msg_t *msg)
 {

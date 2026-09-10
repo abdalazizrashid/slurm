@@ -44,13 +44,14 @@
 #include "src/common/read_config.h"
 #include "src/common/xmalloc.h"
 #include "src/common/xstring.h"
+#include "src/interfaces/runtime.h"
 #include "src/interfaces/task.h"
 
 const char plugin_name[] = "Native macOS task resource controls";
 const char plugin_type[] = "task/darwin";
 const uint32_t plugin_version = SLURM_VERSION_NUMBER;
 
-static uint64_t cpu_seconds, address_mib;
+static uint64_t cpu_seconds, address_mib, footprint_mib;
 
 static int _unsupported(cpu_bind_type_t cpu, mem_bind_type_t mem, uint32_t min,
 			uint32_t max, uint32_t gov, const char *tres_freq,
@@ -86,6 +87,7 @@ extern int init(void)
 	s_p_options_t options[] = {
 		{ "PerProcessCPUTimeSeconds", S_P_UINT64 },
 		{ "PerProcessAddressSpaceMiB", S_P_UINT64 },
+		{ "InitialTaskImageFootprintMiB", S_P_UINT64 },
 		{ NULL }
 	};
 	s_p_hashtbl_t *table = s_p_hashtbl_create(options);
@@ -93,7 +95,7 @@ extern int init(void)
 	struct stat st;
 	int rc = SLURM_ERROR, native_rc, saved_errno;
 
-	cpu_seconds = address_mib = 0;
+	cpu_seconds = address_mib = footprint_mib = 0;
 	/* Invalid configuration must not silently disable configured limits. */
 	if (!path || stat(path, &st)) {
 		error("task/darwin requires a readable darwin.conf: %s", path);
@@ -108,6 +110,7 @@ extern int init(void)
 		goto done;
 	s_p_get_uint64(&cpu_seconds, "PerProcessCPUTimeSeconds", table);
 	s_p_get_uint64(&address_mib, "PerProcessAddressSpaceMiB", table);
+	s_p_get_uint64(&footprint_mib, "InitialTaskImageFootprintMiB", table);
 	if (_unsupported(slurm_conf.task_plugin_param, 0, 0, 0, 0, NULL, NULL))
 		goto done;
 	/* The manager adds this default after task_p_pre_setuid() runs. */
@@ -121,7 +124,10 @@ extern int init(void)
 		errno = ENOTSUP;
 		goto done;
 	}
-	native_rc = darwin_limits_validate(cpu_seconds, address_mib);
+	native_rc =
+		darwin_limits_validate(cpu_seconds, address_mib, footprint_mib);
+	if (!native_rc && footprint_mib)
+		native_rc = darwin_launch_probe(footprint_mib);
 	if (native_rc) {
 		error("task/darwin resource configuration unavailable: %s",
 		      slurm_strerror(native_rc));
@@ -131,8 +137,9 @@ extern int init(void)
 	rc = SLURM_SUCCESS;
 	darwin_launch_prepare_limits(cpu_seconds, address_mib);
 	debug("task/darwin loaded: CPU time=%"PRIu64" seconds/process, "
-	      "address space=%"PRIu64" MiB/process (0 disables)",
-	      cpu_seconds, address_mib);
+	      "address space=%"PRIu64" MiB/process, "
+	      "initial task image footprint=%"PRIu64" MiB (0 disables)",
+	      cpu_seconds, address_mib, footprint_mib);
 done:
 	/* Preserve the selected failure reason across configuration cleanup. */
 	saved_errno = errno;
@@ -145,9 +152,19 @@ done:
 
 extern int fini(void)
 {
-	cpu_seconds = address_mib = 0;
+	cpu_seconds = address_mib = footprint_mib = 0;
+	darwin_launch_prepare(0);
 	darwin_launch_prepare_limits(0, 0);
 	return SLURM_SUCCESS;
+}
+
+static int _runtime_supported(void)
+{
+	if (!footprint_mib || runtime_g_is_none())
+		return SLURM_SUCCESS;
+	error("InitialTaskImageFootprintMiB requires runtime/none so the final image is launched by Slurm");
+	errno = ENOTSUP;
+	return SLURM_ERROR;
 }
 
 static int _oom_supported(bool oom_kill_step, uint32_t step_id, char **err_msg)
@@ -181,6 +198,8 @@ extern int task_p_slurmd_launch_request(launch_tasks_request_msg_t *req,
 
 extern int task_p_pre_setuid(stepd_step_rec_t *step)
 {
+	if (_runtime_supported())
+		return SLURM_ERROR;
 	if (_oom_supported(step->oom_kill_step, step->step_id.step_id, NULL))
 		return SLURM_ERROR;
 	return _unsupported(step->cpu_bind_type, step->mem_bind_type,
@@ -192,7 +211,8 @@ extern int task_p_pre_launch_priv(stepd_step_rec_t *step, uint32_t node_tid,
 				  uint32_t global_tid)
 {
 	/* Recheck policy populated after the early hooks, before task release. */
-	if (_oom_supported(step->oom_kill_step, step->step_id.step_id, NULL))
+	if (_runtime_supported() ||
+	    _oom_supported(step->oom_kill_step, step->step_id.step_id, NULL))
 		return SLURM_ERROR;
 	return _unsupported(step->cpu_bind_type, step->mem_bind_type,
 			    step->cpu_freq_min, step->cpu_freq_max,
@@ -203,6 +223,9 @@ extern int task_p_pre_launch(stepd_step_rec_t *step)
 {
 	int rc = darwin_limits_apply(cpu_seconds, address_mib);
 
+	/* Carry policy in process-local state, not a user-editable environment. */
+	if (!rc)
+		rc = darwin_launch_prepare(footprint_mib);
 	if (!rc)
 		return SLURM_SUCCESS;
 	error("Cannot install per-process resource limits: %s",
@@ -225,7 +248,7 @@ extern int task_p_post_step(stepd_step_rec_t *step)
 extern int task_p_add_pid(pid_t pid)
 {
 	/* Public rlimits cannot be imposed remotely on an adopted process. */
-	if (cpu_seconds || address_mib) {
+	if (cpu_seconds || address_mib || footprint_mib) {
 		error("task/darwin cannot apply configured launch limits to an adopted process");
 		errno = ENOTSUP;
 		return SLURM_ERROR;

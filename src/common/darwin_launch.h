@@ -35,13 +35,25 @@
 #ifndef _DARWIN_LAUNCH_H
 #define _DARWIN_LAUNCH_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Internal task-child state; never populated from a workload environment. */
+/* All helpers return zero or an errno value. Zero MiB disables the policy. */
+extern int darwin_launch_probe(uint64_t initial_image_mib);
+extern int darwin_launch_prepare(uint64_t initial_image_mib);
+extern bool darwin_launch_configured(void);
 /* Store validated per-process ceilings in the parent, without applying them. */
 extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
 					 uint64_t address_mib);
-/* Epilog child only, before exec. Returns zero or an errno value. */
+/* Epilog child only, before exec; does not prepare an initial-image limit. */
 extern int darwin_launch_apply_epilog(void);
+/*
+ * Replaces this process, preserving PID and the existing stepd wait contract.
+ * Only returns an errno on failure. The footprint policy covers this image:
+ * ordinary exec and fork can reset it. It is not a process-tree RAM budget.
+ */
+extern int darwin_launch_exec(const char *path, char *const argv[],
+			      char *const env[]);
 
 #endif

@@ -39,7 +39,8 @@
 #include <sys/types.h>
 
 /* All helpers return zero on success or an errno value on failure. */
-extern int darwin_limits_validate(uint64_t cpu_seconds, uint64_t address_mib);
+extern int darwin_limits_validate(uint64_t cpu_seconds, uint64_t address_mib,
+				  uint64_t footprint_mib);
 /* Only call in the workload child. Zero leaves the corresponding limit alone. */
 extern int darwin_limits_apply(uint64_t cpu_seconds, uint64_t address_mib);
 

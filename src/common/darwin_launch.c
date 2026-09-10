@@ -34,9 +34,99 @@
 
 #include "darwin_launch.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <unistd.h>
+
 #include "darwin_limits.h"
 
 static uint64_t epilog_cpu_seconds, epilog_address_mib;
+
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <spawn.h>
+#include <sys/sysctl.h>
+
+/*
+ * Private ABI from Apple XNU f6217f891ac0bb64f3d375211650a4c1ff8ca1ea,
+ * libsyscall/wrappers/spawn/posix_spawn.c and bsd/sys/spawn_internal.h.
+ * Capability failure is an error when explicitly requested, never a fallback.
+ */
+typedef int (*jetsam_fn_t)(posix_spawnattr_t *, short, int, int, int);
+#define JETSAM_FATAL_ACTIVE 0x04
+#define JETSAM_FATAL_INACTIVE 0x08
+
+static uint64_t footprint_mib;
+
+static int _attributes(posix_spawnattr_t *attr, uint64_t mib)
+{
+	jetsam_fn_t jetsam;
+	int enabled = 0, rc;
+	size_t size = sizeof(enabled);
+
+	if (!mib || mib > INT32_MAX)
+		return EINVAL;
+	jetsam = (jetsam_fn_t) dlsym(RTLD_DEFAULT,
+				     "posix_spawnattr_setjetsam_ext");
+	if (!jetsam)
+		return ENOTSUP;
+	/* Some development kernels expose an explicit disable switch. */
+	if (!sysctlbyname("kern.memorystatus_highwater_enabled", &enabled,
+			  &size, NULL, 0)) {
+		if (size != sizeof(enabled) || !enabled)
+			return ENOTSUP;
+	} else if (errno != ENOENT) {
+		return errno;
+	}
+	if ((rc = posix_spawnattr_init(attr)))
+		return rc;
+	if (!(rc = posix_spawnattr_setflags(attr, POSIX_SPAWN_SETEXEC)))
+		/* -1 selects the kernel's default jetsam priority. */
+		rc = jetsam(attr, JETSAM_FATAL_ACTIVE | JETSAM_FATAL_INACTIVE,
+			    -1, (int) mib, (int) mib);
+	if (rc)
+		posix_spawnattr_destroy(attr);
+	return rc;
+}
+#endif
+
+extern int darwin_launch_probe(uint64_t initial_image_mib)
+{
+	if (!initial_image_mib)
+		return 0;
+	if (initial_image_mib > INT32_MAX)
+		return EOVERFLOW;
+#ifdef __APPLE__
+	posix_spawnattr_t attr;
+	int rc = _attributes(&attr, initial_image_mib);
+
+	if (!rc)
+		posix_spawnattr_destroy(&attr);
+	return rc;
+#else
+	return ENOTSUP;
+#endif
+}
+
+extern int darwin_launch_prepare(uint64_t initial_image_mib)
+{
+	int rc = darwin_launch_probe(initial_image_mib);
+
+#ifdef __APPLE__
+	if (!rc)
+		footprint_mib = initial_image_mib;
+#endif
+	return rc;
+}
+
+extern bool darwin_launch_configured(void)
+{
+#ifdef __APPLE__
+	return footprint_mib != 0;
+#else
+	return false;
+#endif
+}
 
 extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
 					 uint64_t address_mib)
@@ -48,4 +138,28 @@ extern void darwin_launch_prepare_limits(uint64_t cpu_seconds,
 extern int darwin_launch_apply_epilog(void)
 {
 	return darwin_limits_apply(epilog_cpu_seconds, epilog_address_mib);
+}
+
+extern int darwin_launch_exec(const char *path, char *const argv[],
+			      char *const env[])
+{
+	if (!path || !argv || !argv[0] || !env)
+		return EINVAL;
+#ifdef __APPLE__
+	if (footprint_mib) {
+		posix_spawnattr_t attr;
+		pid_t unexpected_child = 0;
+		int rc = _attributes(&attr, footprint_mib);
+
+		if (rc)
+			return rc;
+		rc = posix_spawn(&unexpected_child, path, NULL, &attr, argv,
+				 env);
+		posix_spawnattr_destroy(&attr);
+		/* SETEXEC never returns on success. */
+		return rc ? rc : EIO;
+	}
+#endif
+	execve(path, argv, env);
+	return errno;
 }

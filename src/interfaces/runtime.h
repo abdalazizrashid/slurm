@@ -64,6 +64,9 @@ typedef enum {
 extern int runtime_g_init(const char *plugin_name, runtime_context_t context);
 extern void runtime_g_fini(void);
 
+/* True only when the initialized context is exactly runtime/none. */
+extern bool runtime_g_is_none(void);
+
 /* Set up the runtime for the step. Runs in slurmstepd. */
 extern int runtime_g_setup(slurmd_conf_t *conf, stepd_step_rec_t *step,
 			   slurm_addr_t *cli, slurm_msg_t *msg);

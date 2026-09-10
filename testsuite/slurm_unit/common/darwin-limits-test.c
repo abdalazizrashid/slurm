@@ -114,9 +114,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	assert(argc == 1);
-	assert(!darwin_limits_validate(0, 0));
-	assert(darwin_limits_validate(UINT64_MAX, 0) == EOVERFLOW);
-	assert(darwin_limits_validate(0, UINT64_MAX) == EOVERFLOW);
+	assert(!darwin_limits_validate(0, 0, 0));
+	assert(darwin_limits_validate(UINT64_MAX, 0, 0) == EOVERFLOW);
+	assert(darwin_limits_validate(0, UINT64_MAX, 0) == EOVERFLOW);
+	assert(darwin_limits_validate(0, 0, UINT64_MAX) == EOVERFLOW);
 	assert(!darwin_limits_apply(0, 0));
 	_address_space();
 	_inheritance(argv[0]);
