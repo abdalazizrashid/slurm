@@ -222,7 +222,8 @@ int _do_stat(slurm_step_id_t *step_id, char *nodelist, uint32_t req_cpufreq_min,
 	tot_tasks += ntasks;
 
 	if (tot_tasks) {
-		step.stats.act_cpufreq /= (double)tot_tasks;
+		if (!fuzzy_equal(step.stats.act_cpufreq, NO_VAL))
+			step.stats.act_cpufreq /= (double) tot_tasks;
 
 		ave_usage_tmp = step.stats.tres_usage_in_ave;
 		step.stats.tres_usage_in_ave = slurmdb_ave_tres_usage(

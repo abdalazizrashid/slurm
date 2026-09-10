@@ -49,6 +49,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/proc.h>
+#endif
+
 #ifdef __FreeBSD__
 #include <err.h>
 #include <sys/param.h>
@@ -173,7 +178,82 @@ extern int proctrack_p_wait_for_any_task(int *status, bool block,
 /*
  * Get list of all PIDs belonging to process group cont_id
  */
-#ifdef __FreeBSD__
+#if defined(__APPLE__)
+extern int proctrack_p_get_pids(uint64_t cont_id, pid_t **pids, int *npids)
+{
+	pid_t *pid_array = NULL;
+	int bytes, capacity = 0, count = 0;
+
+	*pids = NULL;
+	*npids = 0;
+	if (!cont_id || (cont_id > INT_MAX)) {
+		errno = EINVAL;
+		return SLURM_ERROR;
+	}
+
+	/* Retry if the group grew while obtaining the snapshot. */
+	for (int attempt = 0; attempt < 8; attempt++) {
+		errno = 0;
+		bytes = proc_listpids(PROC_PGRP_ONLY, cont_id, NULL, 0);
+		if ((bytes < 0) || (!bytes && errno))
+			goto fail;
+		if (!bytes) {
+			xfree(pid_array);
+			return SLURM_SUCCESS;
+		}
+		if (bytes > INT_MAX - 32 * sizeof(pid_t)) {
+			errno = EOVERFLOW;
+			goto fail;
+		}
+		capacity = MAX(bytes + 32 * sizeof(pid_t), capacity);
+		xrealloc(pid_array, capacity);
+		errno = 0;
+		bytes = proc_listpids(PROC_PGRP_ONLY, cont_id, pid_array,
+				      capacity);
+		if ((bytes < 0) || (!bytes && errno))
+			goto fail;
+		if (bytes < capacity)
+			break;
+		if (capacity > INT_MAX / 2) {
+			errno = EOVERFLOW;
+			goto fail;
+		}
+		capacity *= 2;
+		if (attempt == 7) {
+			errno = EAGAIN;
+			goto fail;
+		}
+	}
+
+	for (int i = 0; i < bytes / sizeof(pid_t); i++) {
+		struct proc_bsdinfo info;
+		int size;
+
+		if (pid_array[i] <= 0)
+			continue;
+		size = proc_pidinfo(pid_array[i], PROC_PIDTBSDINFO, 0, &info,
+				    sizeof(info));
+		if (size == sizeof(info)) {
+			if ((info.pbi_pgid != cont_id) ||
+			    (info.pbi_status == SZOMB))
+				continue;
+		} else if (getpgid(pid_array[i]) != (pid_t) cont_id) {
+			continue;
+		}
+		pid_array[count++] = pid_array[i];
+	}
+	if (!count)
+		xfree(pid_array);
+	*pids = pid_array;
+	*npids = count;
+	return SLURM_SUCCESS;
+
+fail:
+	error("%s: enumerate process group %"PRIu64": %m", __func__, cont_id);
+	xfree(pid_array);
+	return SLURM_ERROR;
+}
+#elif defined(__FreeBSD__)
 extern int proctrack_p_get_pids(uint64_t cont_id, pid_t **pids, int *npids)
 {
 	pid_t *pid_array = NULL;

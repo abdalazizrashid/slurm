@@ -553,6 +553,7 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/jobacct_gather/Makefile
 		 src/plugins/jobacct_gather/cgroup/Makefile
 		 src/plugins/jobacct_gather/common/Makefile
+		 src/plugins/jobacct_gather/darwin/Makefile
 		 src/plugins/jobacct_gather/linux/Makefile
 		 src/plugins/jobcomp/Makefile
 		 src/plugins/jobcomp/common/Makefile

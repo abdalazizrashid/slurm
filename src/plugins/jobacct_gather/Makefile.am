@@ -2,6 +2,9 @@
 
 SUBDIRS = common
 
+if DARWIN_BUILD
+SUBDIRS += darwin
+endif
 
 if LINUX_BUILD
 SUBDIRS += linux

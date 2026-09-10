@@ -57,7 +57,9 @@
 #include <syslog.h>
 
 #if defined(__APPLE__)
-#  include <sys/times.h>
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
 #  include <sys/types.h>
 #elif defined(__NetBSD__) || defined(__FreeBSD__)
 #  include <sys/times.h> /* for times(3) */
@@ -102,7 +104,17 @@
  */
 extern int get_memory(uint64_t *real_memory)
 {
-#  ifdef _SC_PHYS_PAGES
+#if defined(__APPLE__)
+	uint64_t bytes;
+	size_t len = sizeof(bytes);
+
+	*real_memory = 1;
+	if (sysctlbyname("hw.memsize", &bytes, &len, NULL, 0) == -1) {
+		error("%s: sysctlbyname(hw.memsize): %m", __func__);
+		return errno;
+	}
+	*real_memory = bytes / (1024 * 1024);
+#elif defined(_SC_PHYS_PAGES)
 	long pages;
 
 	*real_memory = 1;
@@ -201,7 +213,19 @@ extern int get_up_time(uint32_t *up_time)
 		return 0;
 	}
 
-#if defined(__APPLE__) || defined(__NetBSD__) || defined(__FreeBSD__)
+#if defined(__APPLE__)
+	struct timeval boot_time;
+	size_t len = sizeof(boot_time);
+	time_t now;
+
+	*up_time = 0;
+	if (sysctlbyname("kern.boottime", &boot_time, &len, NULL, 0) == -1)
+		return errno;
+	if ((now = time(NULL)) == (time_t) -1)
+		return errno;
+	if (now > boot_time.tv_sec)
+		*up_time = MIN((uint64_t) (now - boot_time.tv_sec), UINT32_MAX);
+#elif defined(__NetBSD__) || defined(__FreeBSD__)
 	clock_t tm;
 	struct tms buf;
 
@@ -231,7 +255,15 @@ extern int get_up_time(uint32_t *up_time)
 
 extern int get_cpu_load(uint32_t *cpu_load)
 {
-#if defined(__APPLE__) || defined(__NetBSD__) || defined(__FreeBSD__)
+#if defined(__APPLE__)
+	double loads[2];
+
+	*cpu_load = 0;
+	if (getloadavg(loads, 2) != 2)
+		return EIO;
+	/* Match Linux's five-minute load average, in hundredths. */
+	*cpu_load = MIN(loads[1] * 100.0, (double) UINT32_MAX);
+#elif defined(__NetBSD__) || defined(__FreeBSD__)
 	/* Not sure how to get CPU load on above systems.
 	 * Perhaps some method below works. */
 	*cpu_load = 0;
@@ -251,7 +283,22 @@ extern int get_cpu_load(uint32_t *cpu_load)
 
 extern int get_free_mem(uint64_t *free_mem)
 {
-#if defined(__APPLE__) || defined(__NetBSD__) || defined(__FreeBSD__)
+#if defined(__APPLE__)
+	vm_statistics64_data_t vm_info;
+	mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+	mach_port_t host = mach_host_self();
+	kern_return_t rc;
+	long page_size = sysconf(_SC_PAGESIZE);
+
+	*free_mem = 0;
+	rc = host_statistics64(host, HOST_VM_INFO64, (host_info64_t) &vm_info,
+			       &count);
+	mach_port_deallocate(mach_task_self(), host);
+	if ((rc != KERN_SUCCESS) || (page_size <= 0))
+		return EIO;
+	/* free_count already includes speculative pages on Darwin. */
+	*free_mem = (uint64_t) vm_info.free_count * page_size / (1024 * 1024);
+#elif defined(__NetBSD__) || defined(__FreeBSD__)
 	/* Not sure how to get CPU load on above systems.
 	 * Perhaps some method below works. */
 	*free_mem = 0;

@@ -29,12 +29,17 @@ TESTS = auth-fork-test \
 
 
 if DARWIN_BUILD
-TESTS += topology-load-test \
+TESTS += darwin-proc-test \
+	darwin-pgid-test \
+	topology-load-test \
 	pmi-accept-test
 # /bin/sh clears DYLD_* variables. Keep the shell/exec regression independent
 # of libtool's temporary library search path and an older installed Slurm.
 topology_load_test_CPPFLAGS = $(AM_CPPFLAGS) \
 	-DTOPOLOGY_BUILD_DIR='"$(abs_top_builddir)/src/plugins/topology"'
+darwin_proc_test_SOURCES = darwin-proc-test.c \
+	$(top_srcdir)/src/plugins/jobacct_gather/darwin/darwin_proc.c
+darwin_proc_test_LDADD =
 if WITH_S2N
 TESTS += tls-darwin-test
 tls_darwin_test_CPPFLAGS = $(AM_CPPFLAGS) $(S2N_CPPFLAGS)
@@ -103,6 +108,10 @@ reverse_tree_test_CFLAGS = $(MYCFLAGS)
 reverse_tree_test_LDADD = $(LDADD) @CHECK_LIBS@
 
 if DARWIN_BUILD
+TESTS += darwin-accounting-test
+darwin_accounting_test_CFLAGS = $(MYCFLAGS)
+darwin_accounting_test_LDADD = $(LDADD) @CHECK_LIBS@ \
+	$(top_builddir)/src/plugins/jobacct_gather/common/libjobacct_gather_common.la
 endif
 
 if HAVE_LUA

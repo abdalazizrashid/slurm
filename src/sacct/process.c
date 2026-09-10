@@ -193,8 +193,9 @@ static void _aggregate_tres_usage_stats(slurmdb_stats_t *dest,
 
 void aggregate_stats(slurmdb_stats_t *dest, slurmdb_stats_t *from)
 {
-	/* Means it is a blank record */
-	if (from->act_cpufreq == NO_VAL)
+	/* Missing CPU frequency alone does not mean all statistics are absent. */
+	if ((from->act_cpufreq == NO_VAL) && !from->tres_usage_in_tot &&
+	    !from->tres_usage_out_tot)
 		return;
 
 	if ((from->consumed_energy == NO_VAL64) ||
@@ -203,7 +204,10 @@ void aggregate_stats(slurmdb_stats_t *dest, slurmdb_stats_t *from)
 	else
 		dest->consumed_energy += from->consumed_energy;
 
-	dest->act_cpufreq += from->act_cpufreq;
+	if (from->act_cpufreq == NO_VAL)
+		dest->act_cpufreq = NO_VAL;
+	else if (dest->act_cpufreq != NO_VAL)
+		dest->act_cpufreq += from->act_cpufreq;
 
 	_aggregate_tres_usage_stats(dest, from);
 }

@@ -69,8 +69,9 @@ uint32_t g_tres_count;
 char **assoc_mgr_tres_name_array;
 #endif
 
-
+#ifndef __APPLE__
 static int cpunfo_frequency = 0;
+#endif
 static long conv_units = 0;
 list_t *prec_list = NULL;
 
@@ -88,7 +89,16 @@ static int _find_prec(void *x, void *key)
 	return 0;
 }
 
+#ifdef __APPLE__
+static int _find_prec_record(void *x, void *key)
+{
+	jag_prec_t *prec = x;
+	return prec->record_id == *(uint64_t *) key;
+}
+#endif
+
 /* return weighted frequency in mhz */
+#ifndef __APPLE__
 static uint32_t _update_weighted_freq(struct jobacctinfo *jobacct,
 				      char * sbuf)
 {
@@ -139,6 +149,7 @@ inline static bool _get_freq(char *str)
 
 	return true;
 }
+#endif
 
 /*
  * collects the Pss value from /proc/<pid>/smaps
@@ -200,6 +211,7 @@ static int _get_pss(char *proc_smaps_file, jag_prec_t *prec)
         return 0;
 }
 
+#ifndef __APPLE__
 static int _get_sys_interface_freq_line(uint32_t cpu, char *filename,
 					char * sbuf)
 {
@@ -247,6 +259,7 @@ static int _get_sys_interface_freq_line(uint32_t cpu, char *filename,
 	}
 	return 0;
 }
+#endif
 
 static int _is_a_lwp(uint32_t pid)
 {
@@ -683,9 +696,13 @@ static list_t *_get_precs(list_t *task_list, uint64_t cont_id,
 			acct_gather_energy_g_get_sum(energy_profile,
 						     &jobacct->energy);
 			jobacct->tres_usage_in_tot[TRES_ARRAY_ENERGY] =
-				jobacct->energy.consumed_energy;
+				(jobacct->energy.consumed_energy == NO_VAL64) ?
+					INFINITE64 :
+					jobacct->energy.consumed_energy;
 			jobacct->tres_usage_out_tot[TRES_ARRAY_ENERGY] =
-				jobacct->energy.current_watts;
+				(jobacct->energy.current_watts == NO_VAL) ?
+					INFINITE64 :
+					jobacct->energy.current_watts;
 			log_flag(JAG, "energy = %"PRIu64" watts = %u",
 				 jobacct->energy.consumed_energy,
 				 jobacct->energy.current_watts);
@@ -1054,6 +1071,20 @@ static void _get_offspring_data(list_t *prec_list, jag_prec_t *ancestor,
 	xassert(!root);
 }
 
+/* An unavailable current energy sample must not replace historical extrema. */
+static void _update_energy_usage(uint64_t value, uint64_t *total, uint64_t *max,
+				 uint64_t *min)
+{
+	*total = value;
+	if (value == INFINITE64)
+		return;
+	if (*max == INFINITE64)
+		*max = value;
+	else
+		*max = MAX(*max, value);
+	*min = *max;
+}
+
 extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 				 jag_callbacks_t *callbacks, bool profile)
 {
@@ -1064,7 +1095,9 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 	jag_prec_t *prec = NULL, tmp_prec;
 	struct jobacctinfo *jobacct = NULL;
 	static int processing = 0;
+#ifndef __APPLE__
 	char sbuf[72];
+#endif
 	int energy_counted = 0;
 	time_t ct;
 	int i = 0;
@@ -1093,7 +1126,12 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 	(void)list_for_each(prec_list, (ListForF)_init_tres, NULL);
 	(*(callbacks->get_precs))(task_list, cont_id, callbacks);
 
-	if (!list_count(prec_list) || !task_list || !list_count(task_list))
+	/* Native extern energy records do not require a live process sample. */
+	if (!task_list || !list_count(task_list)
+#ifndef __APPLE__
+	    || !list_count(prec_list)
+#endif
+	)
 		goto finished;	/* We have no business being here! */
 
 	itr = list_iterator_create(task_list);
@@ -1101,9 +1139,26 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 		double cpu_calc;
 		double last_total_cputime;
 		jag_prec_t *permanent_anc;
+		/*
+		 * Current memory totals are also sent to slurmd for job-level
+		 * limit checks. Do not export a previous sample as current when
+		 * any part of this step's memory snapshot is unavailable. Keep
+		 * the historical maxima/minima for final accounting.
+		 */
+		if (callbacks->memory_incomplete) {
+			jobacct->tres_usage_in_tot[TRES_ARRAY_MEM] = INFINITE64;
+			jobacct->tres_usage_in_tot[TRES_ARRAY_VMEM] =
+				INFINITE64;
+		}
 		if (jobacct->pid) {
+#ifdef __APPLE__
+			if (!(prec = list_find_first(prec_list,
+						     _find_prec_record,
+						     &jobacct->id.record_id)))
+#else
 			if (!(prec = list_find_first(prec_list, _find_prec,
 						     &jobacct->pid)))
+#endif
 				continue;
 			/*
 			 * We can't use the prec from the list as we need to
@@ -1193,10 +1248,27 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 			acct_gather_energy_g_get_sum(
 				energy_profile,
 				&jobacct->energy);
+			/* Energy providers and TRES use different no-data values. */
 			prec->tres_data[TRES_ARRAY_ENERGY].size_read =
-				jobacct->energy.consumed_energy;
+				(jobacct->energy.consumed_energy == NO_VAL64) ?
+					INFINITE64 :
+					jobacct->energy.consumed_energy;
 			prec->tres_data[TRES_ARRAY_ENERGY].size_write =
-				jobacct->energy.current_watts;
+				(jobacct->energy.current_watts == NO_VAL) ?
+					INFINITE64 :
+					jobacct->energy.current_watts;
+			/* Either direction can be available independently. */
+			_update_energy_usage(
+				prec->tres_data[TRES_ARRAY_ENERGY].size_read,
+				&jobacct->tres_usage_in_tot[TRES_ARRAY_ENERGY],
+				&jobacct->tres_usage_in_max[TRES_ARRAY_ENERGY],
+				&jobacct->tres_usage_in_min[TRES_ARRAY_ENERGY]);
+			_update_energy_usage(
+				prec->tres_data[TRES_ARRAY_ENERGY].size_write,
+				&jobacct->tres_usage_out_tot[TRES_ARRAY_ENERGY],
+				&jobacct->tres_usage_out_max[TRES_ARRAY_ENERGY],
+				&jobacct->tres_usage_out_min
+					 [TRES_ARRAY_ENERGY]);
 			log_flag(JAG, "energy = %"PRIu64" watts = %"PRIu64" ave_watts = %u",
 				 prec->tres_data[TRES_ARRAY_ENERGY].size_read,
 				 prec->tres_data[TRES_ARRAY_ENERGY].size_write,
@@ -1208,6 +1280,11 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 
 		/* tally their usage */
 		for (i = 0; i < jobacct->tres_count; i++) {
+			if (i == TRES_ARRAY_ENERGY)
+				continue;
+			if (callbacks->memory_incomplete &&
+			    ((i == TRES_ARRAY_MEM) || (i == TRES_ARRAY_VMEM)))
+				continue;
 			if (prec->tres_data[i].size_read == INFINITE64)
 				continue;
 
@@ -1268,7 +1345,7 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 				prec->tres_data[i].size_write;
 		}
 
-		if (jobacct->pid) {
+		if (jobacct->pid && !callbacks->memory_incomplete) {
 			total_job_mem +=
 				jobacct->tres_usage_in_tot[TRES_ARRAY_MEM];
 			total_job_vsize +=
@@ -1280,15 +1357,26 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 						   (double)conv_units);
 		jobacct->sys_cpu_sec = (uint64_t)(prec->ssec /
 						  (double)conv_units);
+#ifdef __APPLE__
+		jobacct->user_cpu_usec =
+			(uint64_t) (prec->usec / 1000.0) % 1000000;
+		jobacct->sys_cpu_usec =
+			(uint64_t) (prec->ssec / 1000.0) % 1000000;
+#endif
 
 		/* compute frequency */
 		jobacct->this_sampled_cputime =
 			cpu_calc - last_total_cputime;
+#ifdef __APPLE__
+		/* macOS does not expose a per-process CPU frequency sample. */
+		jobacct->act_cpufreq = NO_VAL;
+#else
 		_get_sys_interface_freq_line(
 			prec->last_cpu,
 			"cpuinfo_cur_freq", sbuf);
 		jobacct->act_cpufreq =
 			_update_weighted_freq(jobacct, sbuf);
+#endif
 
 		log_flag(JAG, "Task %u pid %d ave_freq = %u mem size/max %"PRIu64"/%"PRIu64" vmem size/max %"PRIu64"/%"PRIu64", disk read size/max (%"PRIu64"/%"PRIu64"), disk write size/max (%"PRIu64"/%"PRIu64"), time %f(%"PRIu64"+%"PRIu64") Energy tot/max %"PRIu64"/%"PRIu64" TotPower %"PRIu64" MaxPower %"PRIu64" MinPower %"PRIu64,
 			 jobacct->id.taskid,
@@ -1312,7 +1400,11 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 			 jobacct->tres_usage_out_max[TRES_ARRAY_ENERGY],
 			 jobacct->tres_usage_out_min[TRES_ARRAY_ENERGY]);
 
-		if (profile &&
+		/* The profile dataset cannot represent an unavailable memory sample. */
+		if (profile && !callbacks->memory_incomplete &&
+#ifdef __APPLE__
+		    !jobacct->task_completed &&
+#endif
 		    acct_gather_profile_g_is_active(ACCT_GATHER_PROFILE_TASK)) {
 			jobacct->cur_time = ct;
 
@@ -1332,7 +1424,7 @@ extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
 	}
 	list_iterator_destroy(itr);
 
-	if (slurm_conf.job_acct_oom_kill)
+	if (slurm_conf.job_acct_oom_kill && !callbacks->memory_incomplete)
 		jobacct_gather_handle_mem_limit(total_job_mem,
 						total_job_vsize);
 

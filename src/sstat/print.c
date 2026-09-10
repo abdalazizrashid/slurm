@@ -142,10 +142,12 @@ void print_fields(slurmdb_step_rec_t *step)
 			break;
 		case PRINT_ACT_CPUFREQ:
 
-			convert_num_unit2((double)step->stats.act_cpufreq,
-					  outbuf, sizeof(outbuf), UNIT_KILO,
-					  NO_VAL, 1000, params.convert_flags &
-					  (~CONVERT_NUM_UNIT_EXACT));
+			if (!fuzzy_equal(step->stats.act_cpufreq, NO_VAL))
+				convert_num_unit2(
+					step->stats.act_cpufreq, outbuf,
+					sizeof(outbuf), UNIT_KILO, NO_VAL, 1000,
+					params.convert_flags &
+						(~CONVERT_NUM_UNIT_EXACT));
 
 			field->print_routine(field,
 					     outbuf,

@@ -1,7 +1,6 @@
 /*****************************************************************************\
- *  common_jag.h - slurm job accounting gather common plugin functions.
+ *  darwin_proc.h - native process accounting samples.
  *****************************************************************************
- *  Copyright (C) SchedMD LLC.
  *
  *  This file is part of Slurm, a resource management program.
  *  For details, see <https://slurm.schedmd.com/>.
@@ -31,50 +30,30 @@
  *  You should have received a copy of the GNU General Public License along
  *  with Slurm; if not, write to the Free Software Foundation, Inc.,
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
- *
- *  This file is patterned after jobcomp_linux.c, written by Morris Jette and
- *  Copyright (C) 2002 The Regents of the University of California.
 \*****************************************************************************/
 
-#ifndef __COMMON_JAG_H__
-#define __COMMON_JAG_H__
+#ifndef _DARWIN_PROC_H
+#define _DARWIN_PROC_H
 
-#include "src/common/list.h"
+#include <stdint.h>
+#include <sys/types.h>
 
-typedef struct jag_prec {	/* process record */
-	bool	visited;
-	int	act_cpufreq;	/* actual average cpu frequency */
-	bool    completed;       /* the process no longer exists */
-	int	last_cpu;	/* last cpu */
-	pid_t	pid;
-	pid_t	ppid;
-#ifdef __APPLE__
-	uint64_t record_id; /* distinguishes retained tasks after PID reuse */
-#endif
-	double  ssec; /* system cpu time: To normalize divide by system hertz */
-	/* Units of tres_[in|out] should be raw numbers (bytes/joules) */
-	int     tres_count; /* count of tres in the tres_data */
-	acct_gather_data_t *tres_data; /* array of tres data */
-	double  usec; /* user cpu time: To normalize divide by system hertz */
-} jag_prec_t;
+typedef struct {
+	pid_t pid;
+	pid_t ppid;
+	uint64_t start_sec;
+	uint64_t start_usec;
+	uint64_t start_abstime;
+	uint64_t user_ns;
+	uint64_t system_ns;
+	uint64_t rss;
+	uint64_t vsize;
+	uint64_t footprint;
+	uint64_t read_bytes;
+	uint64_t write_bytes;
+} darwin_proc_sample_t;
 
-typedef struct jag_callbacks {
-	/* Do not enforce a sampled memory limit from an incomplete snapshot. */
-	bool memory_incomplete;
-	void (*prec_extra) (jag_prec_t *prec, uint32_t taskid);
-	list_t *(*get_precs) (list_t *task_list, uint64_t cont_id,
-			      struct jag_callbacks *callbacks);
-	void (*get_offspring_data) (list_t *prec_list, jag_prec_t *ancestor,
-				    pid_t pid, jag_prec_t *permanent_ancestor);
-} jag_callbacks_t;
-
-extern list_t *prec_list;
-
-extern void jag_common_init(long in_hertz);
-extern void jag_common_fini(void);
-extern void destroy_jag_prec(void *object);
-
-extern void jag_common_poll_data(list_t *task_list, uint64_t cont_id,
-				 jag_callbacks_t *callbacks, bool profile);
+/* Returns 0 or an errno value. All memory/I/O values are bytes. */
+extern int darwin_proc_sample(pid_t pid, darwin_proc_sample_t *sample);
 
 #endif
