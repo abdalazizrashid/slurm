@@ -2,6 +2,9 @@
 
 SUBDIRS = pgid
 
+if DARWIN_BUILD
+SUBDIRS += darwin
+endif
 
 if LINUX_BUILD
 SUBDIRS += linuxproc

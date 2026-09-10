@@ -108,7 +108,10 @@ reverse_tree_test_CFLAGS = $(MYCFLAGS)
 reverse_tree_test_LDADD = $(LDADD) @CHECK_LIBS@
 
 if DARWIN_BUILD
-TESTS += darwin-accounting-test
+TESTS += darwin-accounting-test \
+	darwin-proctrack-test
+darwin_proctrack_test_CFLAGS = $(MYCFLAGS)
+darwin_proctrack_test_LDADD = $(LDADD) @CHECK_LIBS@
 darwin_accounting_test_CFLAGS = $(MYCFLAGS)
 darwin_accounting_test_LDADD = $(LDADD) @CHECK_LIBS@ \
 	$(top_builddir)/src/plugins/jobacct_gather/common/libjobacct_gather_common.la

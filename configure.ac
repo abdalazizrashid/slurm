@@ -591,6 +591,7 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/proctrack/cgroup/Makefile
 		 src/plugins/proctrack/linuxproc/Makefile
 		 src/plugins/proctrack/pgid/Makefile
+		 src/plugins/proctrack/darwin/Makefile
 		 src/plugins/runtime/Makefile
 		 src/plugins/runtime/none/Makefile
 		 src/plugins/runtime/oci/Makefile
