@@ -274,6 +274,7 @@ START_TEST(test_slurm_buffers_pack_msg)
 {
 	return_code_msg_t rc_msg = { .return_code = SLURM_SUCCESS };
 	msg_bufs_t buffers = { 0 };
+	int rc, saved_errno;
 	slurm_msg_t msg;
 
 	/*
@@ -308,9 +309,10 @@ START_TEST(test_slurm_buffers_pack_msg)
 	msg.msg_type = NO_VAL16;
 	msg.data = NULL;
 
-	ck_assert_msg((slurm_buffers_pack_msg(&msg, &buffers, false) < 0),
-		      "the send did not fail");
-	ck_assert_int_eq(errno, SLURM_COMMUNICATIONS_SEND_ERROR);
+	rc = slurm_buffers_pack_msg(&msg, &buffers, false);
+	saved_errno = errno;
+	ck_assert_msg((rc < 0), "the send did not fail");
+	ck_assert_int_eq(saved_errno, SLURM_COMMUNICATIONS_SEND_ERROR);
 	/* nothing may be left for the caller to send */
 	ck_assert_msg((buffers.body == NULL), "a body was left to send");
 	ck_assert_msg((buffers.header == NULL), "a header was left to send");
