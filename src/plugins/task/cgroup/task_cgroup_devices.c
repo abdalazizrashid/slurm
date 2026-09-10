@@ -69,6 +69,12 @@ static int _handle_device_access(void *x, void *arg)
 	char *dev_id_str;
 	int rc = SLURM_SUCCESS;
 
+	if (gres_device->dev_desc.type == DEV_TYPE_NONE) {
+		error("Device access constraints are unavailable for GRES identity %s",
+		      gres_device->unique_id);
+		return SLURM_ERROR;
+	}
+
 	dev_id_str = gres_device_id2str(&gres_device->dev_desc);
 	if (slurm_conf.debug_flags & DEBUG_FLAG_GRES) {
 		char *t_str = NULL;

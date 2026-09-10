@@ -1078,7 +1078,8 @@ static int _find_fileless_gres(void *x, void *arg)
 	uint32_t plugin_id = *(uint32_t *)arg;
 
 	if ((gres_slurmd_conf->plugin_id == plugin_id) &&
-	    !gres_slurmd_conf->file) {
+	    !gres_slurmd_conf->file &&
+	    !(gres_slurmd_conf->config_flags & GRES_CONF_HAS_ID)) {
 		warning("Ignoring file-less GPU %s:%s from final GRES list",
 			gres_slurmd_conf->name, gres_slurmd_conf->type_name);
 		return 1;
@@ -1169,6 +1170,9 @@ static int _post_plugin_gres_conf(void *x, void *arg)
 
 	if (gres_slurmd_conf->plugin_id != gres_ctx->plugin_id)
 		return 0;
+
+	gres_ctx->config_flags |= gres_slurmd_conf->config_flags &
+				  (GRES_CONF_HAS_DEVICE | GRES_CONF_ENV_METAL);
 
 	if (gres_slurmd_conf->config_flags & GRES_CONF_UUID) {
 		if (!gres_slurmd_conf->unique_id) {
@@ -1347,6 +1351,8 @@ static char *_get_autodetect_flags_str(void)
 			xstrfmtcat(flags, "%snrt", flags ? "," : "");
 		else if (autodetect_flags & GRES_AUTODETECT_GPU_NVIDIA)
 			xstrfmtcat(flags, "%snvidia", flags ? "," : "");
+		else if (autodetect_flags & GRES_AUTODETECT_GPU_METAL)
+			xstrfmtcat(flags, "%smetal", flags ? "," : "");
 		else if (autodetect_flags & GRES_AUTODETECT_GPU_OFF)
 			xstrfmtcat(flags, "%soff", flags ? "," : "");
 	}
@@ -1371,6 +1377,8 @@ static uint32_t _handle_autodetect_flags(char *str)
 		flags |= GRES_AUTODETECT_GPU_NRT;
 	else if (xstrcasestr(str, "nvidia"))
 		flags |= GRES_AUTODETECT_GPU_NVIDIA;
+	else if (!xstrcasecmp(str, "metal"))
+		flags |= GRES_AUTODETECT_GPU_METAL;
 	else if (!xstrcasecmp(str, "off"))
 		flags |= GRES_AUTODETECT_GPU_OFF;
 	else
@@ -1468,12 +1476,11 @@ static int _slurm_conf_gres_str(void *x, void *arg)
 	if (gres_slurmd_conf && gres_slurmd_conf->name) {
 		bool has_type = gres_slurmd_conf->type_name &&
 				gres_slurmd_conf->type_name[0];
-		xstrfmtcat(*gres_str, "%s%s:%s%s%ld",
+		xstrfmtcat(*gres_str, "%s%s:%s%s%" PRIu64,
 			   gres_str && gres_str[0] ? "," : "",
 			   gres_slurmd_conf->name,
 			   has_type ? gres_slurmd_conf->type_name : "",
-			   has_type ? ":" : "",
-			   gres_slurmd_conf->count);
+			   has_type ? ":" : "", gres_slurmd_conf->count);
 	}
 	return SLURM_SUCCESS;
 }
@@ -1488,6 +1495,9 @@ extern void gres_get_autodetected_gpus(node_config_load_t node_conf,
 	char *autodetect_option_name = NULL;
 
 	int autodetect_options[] = {
+#ifdef HAVE_METAL
+		GRES_AUTODETECT_GPU_METAL,
+#endif
 		GRES_AUTODETECT_GPU_NVML,
 		GRES_AUTODETECT_GPU_NVIDIA,
 		GRES_AUTODETECT_GPU_RSMI,
@@ -1960,8 +1970,8 @@ static int _foreach_gres_conf(void *x, void *arg)
 	if (gres_slurmd_conf->config_flags & GRES_CONF_COUNT_ONLY)
 		gres_ctx->config_flags |= GRES_CONF_COUNT_ONLY;
 
-	if (gres_slurmd_conf->config_flags & GRES_CONF_HAS_FILE)
-		gres_ctx->config_flags |= GRES_CONF_HAS_FILE;
+	gres_ctx->config_flags |=
+		gres_slurmd_conf->config_flags & GRES_CONF_HAS_DEVICE;
 
 	if (gres_slurmd_conf->config_flags & GRES_CONF_ONE_SHARING)
 		gres_ctx->config_flags |= GRES_CONF_ONE_SHARING;
@@ -1986,9 +1996,9 @@ static int _foreach_gres_conf(void *x, void *arg)
 	}
 
 	foreach_gres_conf->rec_count++;
-	orig_has_file = gres_slurmd_conf->config_flags & GRES_CONF_HAS_FILE;
+	orig_has_file = gres_slurmd_conf->config_flags & GRES_CONF_HAS_DEVICE;
 	if (foreach_gres_conf->new_has_file == -1) {
-		if (gres_slurmd_conf->config_flags & GRES_CONF_HAS_FILE)
+		if (gres_slurmd_conf->config_flags & GRES_CONF_HAS_DEVICE)
 			foreach_gres_conf->new_has_file = 1;
 		else
 			foreach_gres_conf->new_has_file = 0;
@@ -2017,9 +2027,6 @@ static int _foreach_gres_conf(void *x, void *arg)
 		fatal("gres.conf duplicate records for %s",
 		      gres_ctx->gres_name);
 	}
-
-	if (foreach_gres_conf->new_has_file)
-		gres_ctx->config_flags |= GRES_CONF_HAS_FILE;
 
 	return 0;
 }
@@ -2722,8 +2729,15 @@ static gres_device_t *_init_gres_device(int index, char *one_name,
 	gres_device->path = xstrdup(one_name);
 	gres_device->unique_id = xstrdup(unique_id);
 
+	if (!one_name && unique_id) {
+		gres_device->dev_desc.type = DEV_TYPE_NONE;
+		gres_device->dev_desc.major = NO_VAL;
+		gres_device->dev_desc.minor = NO_VAL;
+		return gres_device;
+	}
+
 	if (_set_gres_device_desc(gres_device) != SLURM_SUCCESS) {
-		xfree(gres_device);
+		destroy_gres_device(gres_device);
 		return NULL;
 	}
 
@@ -2761,6 +2775,46 @@ static int _foreach_fill_in_gres_devices(void *x, void *arg)
 	node_config_load_t *config = fill_in_gres_devices->config;
 	hostlist_t *hl;
 	char *one_name;
+
+	if (xstrcmp(gres_slurmd_conf->name, config->gres_name))
+		return 0;
+
+	if (gres_slurmd_conf->config_flags & GRES_CONF_HAS_ID) {
+		gres_device_t *device;
+
+		if (gres_slurmd_conf->file || !gres_slurmd_conf->unique_id ||
+		    !gres_slurmd_conf->unique_id[0] ||
+		    (gres_slurmd_conf->count != 1)) {
+			error("%s: identity GRES requires one unique ID and no File",
+			      config->gres_name);
+			fill_in_gres_devices->rc = SLURM_ERROR;
+			return -1;
+		}
+		if (list_find_first(fill_in_gres_devices->names_list,
+				    slurm_find_char_exact_in_list,
+				    gres_slurmd_conf->unique_id)) {
+			error("%s: duplicate device identity %s", config->gres_name,
+			      gres_slurmd_conf->unique_id);
+			fill_in_gres_devices->rc = SLURM_ERROR;
+			return -1;
+		}
+		/* names_list owns malloc strings, as does hostlist_shift(). */
+		if (!(one_name = strdup(gres_slurmd_conf->unique_id)))
+			fatal("%s: strdup: %m", __func__);
+		list_append(fill_in_gres_devices->names_list, one_name);
+		if (config->in_slurmd) {
+			if (!*fill_in_gres_devices->gres_devices)
+				*fill_in_gres_devices->gres_devices =
+					list_create(destroy_gres_device);
+			device = _init_gres_device(fill_in_gres_devices->index,
+						   NULL,
+						   gres_slurmd_conf->unique_id);
+			list_append(*fill_in_gres_devices->gres_devices,
+				    device);
+		}
+		fill_in_gres_devices->index++;
+		return 0;
+	}
 
 	if (!(gres_slurmd_conf->config_flags & GRES_CONF_HAS_FILE) ||
 	    !gres_slurmd_conf->file ||
@@ -3064,7 +3118,7 @@ extern int gres_g_node_config_load(uint32_t cpu_cnt, char *node_name,
 		if (gres_context[i].ops.node_config_load)
 			rc2 = (*(gres_context[i].ops.node_config_load))(
 				gres_conf_list, &node_conf);
-		else if (gres_context[i].config_flags & GRES_CONF_HAS_FILE) {
+		else if (gres_context[i].config_flags & GRES_CONF_HAS_DEVICE) {
 			rc2 = gres_node_config_load(
 				gres_conf_list, &node_conf,
 				&gres_context[i].np_gres_devices);
@@ -3077,7 +3131,7 @@ extern int gres_g_node_config_load(uint32_t cpu_cnt, char *node_name,
 
 	/* Postprocess gres_conf_list after all plugins' node_config_load */
 
-	/* Remove every GPU with an empty File */
+	/* Reject GPUs with neither a device file nor an explicit identity. */
 	(void) list_delete_all(gres_conf_list, _find_fileless_gres,
 			       &gpu_plugin_id);
 
@@ -3184,8 +3238,14 @@ static int _add_to_gres_conf_list(gres_slurmd_conf_t *conf, char *node_name)
 		      gres_ctx->gres_name);
 		return SLURM_ERROR;
 	}
-	new_has_file = conf->config_flags & GRES_CONF_HAS_FILE;
-	orig_has_file = gres_ctx->config_flags & GRES_CONF_HAS_FILE;
+	if ((conf->config_flags & GRES_CONF_HAS_ID) &&
+	    ((conf->config_flags & GRES_CONF_HAS_FILE) || !conf->unique_id ||
+	     !conf->unique_id[0] || conf->count != 1)) {
+		error("%s: invalid identity GRES from node %s", __func__, node_name);
+		return SLURM_ERROR;
+	}
+	new_has_file = conf->config_flags & GRES_CONF_HAS_DEVICE;
+	orig_has_file = gres_ctx->config_flags & GRES_CONF_HAS_DEVICE;
 	if (orig_has_file && !new_has_file && conf->count) {
 		error("%s: gres/%s lacks \"File=\" parameter for node %s",
 		      __func__, conf->name, node_name);
@@ -4184,6 +4244,7 @@ static int _node_config_validate(node_record_t *node_ptr,
 
 	/* If the gres is sharing we need to have topo configured. */
 	if (slurmd_conf_tot.cpu_set_cnt ||
+	    (slurmd_conf_tot.config_flags & GRES_CONF_HAS_ID) ||
 	    (gres_id_sharing(slurmd_conf_tot.plugin_id) && gres_ns->alt_gres))
 		slurmd_conf_tot.topo_cnt = slurmd_conf_tot.rec_cnt;
 
@@ -4313,7 +4374,7 @@ static int _node_config_validate(node_record_t *node_ptr,
 		gres_ns->topo_cnt = slurmd_conf_tot.topo_cnt;
 	}
 
-	has_file = gres_ctx->config_flags & GRES_CONF_HAS_FILE;
+	has_file = gres_ctx->config_flags & GRES_CONF_HAS_DEVICE;
 	has_type = gres_ctx->config_flags & GRES_CONF_HAS_TYPE;
 	if (gres_id_shared(gres_ctx->config_flags))
 		dev_cnt = slurmd_conf_tot.topo_cnt;
@@ -4802,7 +4863,7 @@ static int _node_reconfig_test(char *node_name, char *new_gres,
 	int rc = SLURM_SUCCESS;
 
 	xassert(gres_state_node);
-	if (!(gres_ctx->config_flags & GRES_CONF_HAS_FILE))
+	if (!(gres_ctx->config_flags & GRES_CONF_HAS_DEVICE))
 		return SLURM_SUCCESS;
 
 	orig_gres_ns = gres_state_node->gres_data;
@@ -4857,7 +4918,7 @@ static int _node_reconfig(char *node_name, char *new_gres, char **gres_str,
 
 	gres_ns->gres_cnt_avail = gres_ns->gres_cnt_config;
 
-	if (gres_ctx->config_flags & GRES_CONF_HAS_FILE) {
+	if (gres_ctx->config_flags & GRES_CONF_HAS_DEVICE) {
 		if (gres_id_shared(gres_ctx->config_flags))
 			gres_bits = gres_ns->topo_cnt;
 		else
@@ -10399,6 +10460,12 @@ static int _get_usable_gres(int context_inx, int proc_id,
 			*flags |= GRES_INTERNAL_FLAG_VERBOSE;
 	}
 
+	if ((gres_context[context_inx].config_flags & GRES_CONF_HAS_ID) &&
+	    !xstrncasecmp(sep, "closest", 7)) {
+		error("GPU closest binding is unavailable for identity-only devices");
+		return SLURM_ERROR;
+	}
+
 	if (step->flags & LAUNCH_GRES_ALLOW_TASK_SHARING) {
 		if (get_devices)
 			return SLURM_SUCCESS;
@@ -10418,11 +10485,13 @@ static int _get_usable_gres(int context_inx, int proc_id,
 		 * not within the context of the whole node, unless specifically
 		 * required with the GRES_CONF_UUID flag.
 		 */
-		if (!(gres_context[context_inx].config_flags & GRES_CONF_UUID))
+		if (!(gres_context[context_inx].config_flags &
+		      (GRES_CONF_UUID | GRES_CONF_ENV_METAL)))
 			bit_consolidate(gres_bit_alloc);
 	}
 
-	if (gres_context[context_inx].config_flags & GRES_CONF_UUID) {
+	if (gres_context[context_inx].config_flags &
+	    (GRES_CONF_UUID | GRES_CONF_ENV_METAL)) {
 		use_local_index = false;
 		dev_index_mode_set = true;
 	}
@@ -11135,6 +11204,9 @@ extern char *gres_device_id2str(gres_device_id_t *gres_dev)
 {
 	char *res = NULL;
 
+	if (gres_dev->type == DEV_TYPE_NONE)
+		return xstrdup("none");
+
 	xstrfmtcat(res, "%c %u:%u rwm",
 		   gres_dev->type == DEV_TYPE_BLOCK ? 'b' : 'c',
 		   gres_dev->major, gres_dev->minor);
@@ -11177,7 +11249,7 @@ extern void destroy_gres_slurmd_conf(void *x)
  */
 extern char *gres_flags2str(uint32_t config_flags)
 {
-	static char flag_str[128];
+	static char flag_str[256];
 	char *sep = "";
 
 	flag_str[0] = '\0';
@@ -11190,6 +11262,12 @@ extern char *gres_flags2str(uint32_t config_flags)
 	if (config_flags & GRES_CONF_EXPLICIT) {
 		strcat(flag_str, sep);
 		strcat(flag_str, "Explicit");
+		sep = ",";
+	}
+
+	if (config_flags & GRES_CONF_HAS_ID) {
+		strcat(flag_str, sep);
+		strcat(flag_str, "HAS_ID");
 		sep = ",";
 	}
 

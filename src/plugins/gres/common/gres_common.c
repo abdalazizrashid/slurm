@@ -66,6 +66,10 @@ extern void common_gres_set_env(common_gres_env_t *gres_env)
 
 	xassert(gres_env);
 
+	/* Metal has no driver-side device renumbering or visibility mask. */
+	if (gres_env->gres_conf_flags & GRES_CONF_ENV_METAL)
+		use_local_dev_index = false;
+
 	if (!gres_env->gres_devices)
 		return;
 
@@ -142,7 +146,8 @@ extern void common_gres_set_env(common_gres_env_t *gres_env)
 		 * Both methods set GRES_CONF_UUID.
 		 */
 		if (gres_device->unique_id &&
-		    ((gres_env->gres_conf_flags & GRES_CONF_UUID)))
+		    (gres_env->gres_conf_flags &
+		     (GRES_CONF_UUID | GRES_CONF_ENV_METAL)))
 			xstrfmtcat(new_local_list, "%s%s%s", local_prefix,
 				   gres_env->prefix, gres_device->unique_id);
 		else
@@ -300,6 +305,10 @@ extern void gres_common_gpu_set_env(common_gres_env_t *gres_env)
 	}
 
 	if (gres_env->local_list) {
+		if (gres_env->gres_conf_flags & GRES_CONF_ENV_METAL)
+			env_array_overwrite(gres_env->env_ptr,
+					    "SLURM_METAL_DEVICE_IDS",
+					    gres_env->local_list);
 		if (gres_env->gres_conf_flags & GRES_CONF_ENV_NVML)
 			env_array_overwrite(gres_env->env_ptr,
 					    "CUDA_VISIBLE_DEVICES",
@@ -318,6 +327,8 @@ extern void gres_common_gpu_set_env(common_gres_env_t *gres_env)
 					    gres_env->local_list);
 		xfree(gres_env->local_list);
 	} else if (!(gres_env->flags & GRES_INTERNAL_FLAG_PROTECT_ENV)) {
+		if (gres_env->gres_conf_flags & GRES_CONF_ENV_METAL)
+			unsetenvp(*gres_env->env_ptr, "SLURM_METAL_DEVICE_IDS");
 		if (gres_env->gres_conf_flags & GRES_CONF_ENV_NVML)
 			unsetenvp(*gres_env->env_ptr, "CUDA_VISIBLE_DEVICES");
 		if (gres_env->gres_conf_flags & GRES_CONF_ENV_RSMI)
@@ -389,6 +400,10 @@ extern bool gres_common_prep_set_env(char ***prep_env_ptr,
 		}
 	}
 	if (vendor_gpu_str) {
+		if (gres_conf_flags & GRES_CONF_ENV_METAL)
+			env_array_overwrite(prep_env_ptr,
+					    "SLURM_METAL_DEVICE_IDS",
+					    vendor_gpu_str);
 		if (gres_conf_flags & GRES_CONF_ENV_NVML)
 			env_array_overwrite(prep_env_ptr,
 					    "CUDA_VISIBLE_DEVICES",
@@ -429,6 +444,8 @@ extern int gres_common_set_env_types_on_node_flags(void *x, void *arg)
 		*node_flags |= GRES_CONF_ENV_OPENCL;
 	if (gres_slurmd_conf->config_flags & GRES_CONF_ENV_ONEAPI)
 		*node_flags |= GRES_CONF_ENV_ONEAPI;
+	if (gres_slurmd_conf->config_flags & GRES_CONF_ENV_METAL)
+		*node_flags |= GRES_CONF_ENV_METAL;
 	if (gres_slurmd_conf->config_flags & GRES_CONF_UUID)
 		*node_flags |= GRES_CONF_UUID;
 

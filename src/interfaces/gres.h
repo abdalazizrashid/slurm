@@ -151,9 +151,14 @@ typedef struct {
 #define GRES_CONF_AUTODETECT SLURM_BIT(15) /* Conf was made with Autodetect */
 #define GRES_CONF_UPDATE_CONFIG SLURM_BIT(16) /* Flag to update gres config */
 #define GRES_CONF_MIG SLURM_BIT(17) /* GRES configuration is for NVIDIA MIG */
+#define GRES_CONF_HAS_ID SLURM_BIT(18) /* Identity without a device file */
+#define GRES_CONF_ENV_METAL SLURM_BIT(19) /* Advisory Metal registry IDs */
+#define GRES_CONF_HAS_DEVICE (GRES_CONF_HAS_FILE | GRES_CONF_HAS_ID)
 
-#define GRES_CONF_ENV_SET    0x000008E0   /* Easy check if any of
-					   * GRES_CONF_ENV_* are set. */
+/* Legacy vendor visibility flags used by the default GPU environment.
+ * ENV_METAL is advisory Slurm metadata and is enabled only by Metal discovery.
+ */
+#define GRES_CONF_ENV_SET 0x000008E0
 
 /* GRES AutoDetect options */
 #define GRES_AUTODETECT_UNSET     0x00000000 /* Not set */
@@ -164,6 +169,7 @@ typedef struct {
 #define GRES_AUTODETECT_GPU_NRT 0x00000010
 #define GRES_AUTODETECT_GPU_NVIDIA 0x00000020
 #define GRES_AUTODETECT_GPU_FULL 0x00000040 /* try all gpu plugins in order */
+#define GRES_AUTODETECT_GPU_METAL 0x00000080
 
 #define GRES_AUTODETECT_GPU_FLAGS 0x000000ff /* reserve first 8 bits for gpu
 					      * flags */

@@ -277,7 +277,9 @@ static void _local_jobacctinfo_aggregate(
 	 * as the last value so the total will be a total of ave instead of just
 	 * the last watts collected.
 	 */
-	from->tres_usage_out_tot[TRES_ARRAY_ENERGY] = from->energy.ave_watts;
+	from->tres_usage_out_tot[TRES_ARRAY_ENERGY] =
+		(from->energy.ave_watts == NO_VAL) ? INFINITE64 :
+						     from->energy.ave_watts;
 
 	jobacctinfo_aggregate(dest, from);
 }

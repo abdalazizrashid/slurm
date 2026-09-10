@@ -54,6 +54,13 @@ AC_PROG_CC
 dnl Initialize the C preprocessor outside optional dependency branches.
 AC_PROG_CPP
 AC_PROG_CXX
+dnl Objective-C uses the configured C driver and flags unless overridden.
+dnl Initialize it here, before any language probe can AC_REQUIRE it; this
+dnl also defines Automake dependency conditionals on non-Darwin hosts, where
+dnl no Objective-C sources are built.
+AS_IF([test -z "$OBJC"], [OBJC=$CC])
+AS_IF([test "${OBJCFLAGS+set}" != set], [OBJCFLAGS=$CFLAGS])
+AC_PROG_OBJC
 AC_PROG_MAKE_SET
 LT_INIT
 X_AC_PKGCONFIG
@@ -272,6 +279,7 @@ AX_COMPARE_VERSION($[HDF5_VERSION], [eq0], [1.8],
 
 X_AC_LZ4
 X_AC_HWLOC
+X_AC_METAL
 X_AC_NVML
 X_AC_RSMI
 X_AC_ONEAPI
@@ -523,6 +531,7 @@ AC_CONFIG_FILES([Makefile
 		 src/plugins/gpu/nrt/Makefile
 		 src/plugins/gpu/nvidia/Makefile
 		 src/plugins/gpu/nvml/Makefile
+		 src/plugins/gpu/metal/Makefile
 		 src/plugins/gpu/oneapi/Makefile
 		 src/plugins/gpu/rsmi/Makefile
 		 src/plugins/gres/Makefile

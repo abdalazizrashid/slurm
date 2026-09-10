@@ -104,17 +104,30 @@ static int _running_profile(void)
 	return run;
 }
 
+static void _energy_unavailable(acct_gather_energy_t *energy)
+{
+	energy->ave_watts = energy->current_watts = NO_VAL;
+	energy->base_consumed_energy = energy->consumed_energy = NO_VAL64;
+	energy->previous_consumed_energy = energy->last_adjustment = NO_VAL64;
+	energy->poll_time = 0;
+}
+
 /*
  * Send profile
  */
 static int _send_profile(void)
 {
 	uint16_t i;
-	uint64_t data[gpus_len];
-	time_t last_time = gpus[gpus_len - 1].last_update_time;
+	time_t last_time;
 
-	if (!_running_profile())
+	if (!gpus_len || !_running_profile())
 		return SLURM_SUCCESS;
+	for (i = 0; i < gpus_len; i++)
+		if (gpus[i].energy.current_watts == NO_VAL)
+			return ENOTSUP;
+
+	uint64_t data[gpus_len];
+	last_time = gpus[gpus_len - 1].last_update_time;
 
 	if (dataset_id < 0) {
 		acct_gather_profile_dataset_t dataset[gpus_len + 1];
@@ -194,6 +207,9 @@ static void _update_energy(gpu_status_t *gpu, uint32_t readings)
 		e->consumed_energy += e->base_consumed_energy;
 	} else {
 		e->consumed_energy = 0;
+		e->base_consumed_energy = 0;
+		e->previous_consumed_energy = 0;
+		e->last_adjustment = 0;
 		e->ave_watts = 0;
 		e->current_watts = gpu->last_update_watt;
 	}
@@ -281,8 +297,13 @@ static void _add_energy(acct_gather_energy_t *energy_tot,
 			acct_gather_energy_t *energy_new,
 			int gpu_num)
 {
-	if (energy_new->current_watts == NO_VAL)
+	/* An incomplete sum is unavailable, not zero or a partial total. */
+	if ((energy_tot->current_watts == NO_VAL) ||
+	    (energy_new->current_watts == NO_VAL) ||
+	    (energy_new->consumed_energy == NO_VAL64)) {
+		_energy_unavailable(energy_tot);
 		return;
+	}
 
 	energy_tot->base_consumed_energy += energy_new->base_consumed_energy;
 	energy_tot->ave_watts += energy_new->ave_watts;
@@ -415,16 +436,27 @@ static int _get_joules_task(uint16_t delta)
 	}
 
 	for (i = 0; i < gpu_cnt; i++) {
+		bool first_sample;
+
 		new = &energies[i];
 		old = &gpus[i].energy;
-		new->previous_consumed_energy = old->consumed_energy;
+		if ((new->current_watts == NO_VAL) ||
+		    (new->consumed_energy == NO_VAL64)) {
+			_energy_unavailable(old);
+			start_current_energies[i] = NO_VAL64;
+			continue;
+		}
+		first_sample =
+			stepd_first || (start_current_energies[i] == NO_VAL64);
+		new->previous_consumed_energy =
+			first_sample ? 0 : old->consumed_energy;
 
 		adjustment = _get_additional_consumption(
 			new->poll_time, time(NULL),
 			new->current_watts,
 			new->current_watts);
 
-		if (!stepd_first) {
+		if (!first_sample) {
 			/* if slurmd is reloaded while the step is alive */
 			if (old->consumed_energy > new->consumed_energy)
 				new->base_consumed_energy =
@@ -631,11 +663,19 @@ extern void acct_gather_energy_p_conf_set(int context_id_in,
 	if (!flag_init) {
 		flag_init = true;
 		if (running_in_slurmd()) {
+			uint32_t device_count = 0;
+
 			if (gres_get_gres_cnt())
-				gpu_g_get_device_count(
-					(unsigned int *) &gpus_len);
+				gpu_g_get_device_count(&device_count);
+			if (device_count > UINT16_MAX) {
+				error("Too many GPU energy sensors: %u", device_count);
+				return;
+			}
+			gpus_len = device_count;
 			if (gpus_len) {
 				gpus = xcalloc(sizeof(gpu_status_t), gpus_len);
+				for (int i = 0; i < gpus_len; i++)
+					_energy_unavailable(&gpus[i].energy);
 				slurm_thread_create(NULL, &thread_gpu_id_run,
 						    _thread_gpu_run, NULL);
 				log_flag(ENERGY, "%s thread launched",

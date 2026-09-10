@@ -1,0 +1,74 @@
+<!--#include virtual="header.txt"-->
+
+<h1>Metal GPU scheduling on macOS</h1>
+
+<p>The <code>gpu/metal</code> plugin discovers Metal devices through Apple's
+public Metal framework. It records the GPU name and registry ID, and logs
+whether memory is unified and the recommended working-set size. The plugin
+requires macOS 10.15 or later. Build with an Objective-C compiler supporting ARC
+and the Foundation and Metal frameworks.</p>
+
+<h2>Configuration</h2>
+<p>Declare GPU resources in <code>slurm.conf</code>, using the count and optionally
+a substring of the normalized GPU name reported by <code>slurmd -C</code>:
+</p>
+<pre>
+GresTypes=gpu
+NodeName=mac01 Gres=gpu:1
+</pre>
+<p>Select discovery for the Mac in <code>gres.conf</code>:</p>
+<pre>
+NodeName=mac01 AutoDetect=metal
+</pre>
+<p><code>AutoDetect=full</code> also probes Metal when available.
+<code>slurmd -G</code> checks the merged configuration. Do not specify
+<code>File</code>, <code>MultipleFiles</code>, <code>Cores</code>,
+<code>Links</code>, or CUDA/ROCm/oneAPI visibility flags for Metal devices.
+The plugin identifies devices by their Metal registry IDs, without device nodes
+or CPU affinity. Each device has a separate GRES bitmap bit. Both the controller
+and compute node must support identity-based GRES; older controllers cannot
+schedule these devices.</p>
+
+<h2>Applications and allocation</h2>
+<p>Request a device using the usual <code>--gres=gpu:1</code> or
+<code>--gpus=1</code> options. Slurm's GRES allocation prevents conflicting Slurm
+allocations of an exclusive device. It does not prevent other applications or
+jobs from opening that GPU through Metal.</p>
+<p><code>SLURM_METAL_DEVICE_IDS</code> contains comma-separated, zero-padded
+16-digit hexadecimal registry IDs assigned to the job, step, or task. An
+application must use this list to select matching <code>registryID</code> values
+from <code>MTLCopyAllDevices()</code>; Metal does not interpret the variable or
+hide other devices. Slurm's usual <code>SLURM_JOB_GPUS</code> and
+<code>SLURM_STEP_GPUS</code> remain Slurm numeric indices. Do not interpret them
+as Metal enumeration order.</p>
+<p>Map, mask and per-task GPU selection control the advisory assignment.
+Closest-CPU binding is unavailable because the plugin does not report GPU/CPU
+affinity. Frequency requests report <code>GpuFreq=control_disabled</code>.
+MPS and shard GRES configuration is rejected; MIG and driver-level GPU
+partitioning are unavailable.</p>
+
+<h2>Memory and accounting</h2>
+<p>Unified memory is shared with the CPU. The working-set recommendation is a
+performance guideline, not dedicated VRAM, an allocation, or an enforced limit.
+GPU-count TRES allocation accounting is available. Per-process GPU memory,
+utilization and energy counters are unavailable.</p>
+
+<h2>Testing and operations</h2>
+<p>The test program <code>testsuite/slurm_unit/common/metal-smoke</code> runs a
+bounded compute kernel and verifies all results. It can run standalone or as
+<code>srun --gres=gpu:1 /path/to/metal-smoke</code>. Within a Slurm job it requires
+an assigned registry ID and fails if that device cannot be found.</p>
+<p>Drain a node and finish its jobs before changing its attached GPUs. Test
+hot-plug and sleep/resume behavior before relying on them in production.
+Registry IDs identify devices across processes but may change after a reboot or
+hot-plug event.</p>
+
+<h2>API references</h2>
+<ul>
+<li><a href="https://developer.apple.com/documentation/metal/mtlcopyalldevices()">Metal device enumeration</a></li>
+<li><a href="https://developer.apple.com/documentation/metal/mtldevice/registryid">Registry identity</a></li>
+<li><a href="https://developer.apple.com/documentation/metal/mtldevice/hasunifiedmemory">Unified memory</a></li>
+<li><a href="https://developer.apple.com/documentation/metal/mtldevice/recommendedmaxworkingsetsize">Recommended working set</a></li>
+</ul>
+
+<!--#include virtual="footer.txt"-->

@@ -298,6 +298,10 @@ static int _validate_cpus_links(gres_slurmd_conf_t *conf_gres,
 	    xstrcmp(conf_gres->links, sys_gres->links))
 		return 0;
 
+	if ((sys_gres->config_flags & GRES_CONF_HAS_ID) &&
+	    (conf_gres->cpus || conf_gres->links))
+		return 0;
+
 	/* If all checks out above, return */
 	return 1;
 }
@@ -635,6 +639,30 @@ extern int gres_p_node_config_load(list_t *gres_conf_list,
 	if (gres_devices) {
 		debug("%s: Resetting gres_devices", plugin_name);
 		FREE_NULL_LIST(gres_devices);
+	}
+
+	if (gres_get_autodetect_flags() & GRES_AUTODETECT_GPU_METAL) {
+		list_itr_t *itr = list_iterator_create(gres_conf_list);
+		gres_slurmd_conf_t *conf;
+
+		while ((conf = list_next(itr))) {
+			if (gres_is_shared_name(conf->name)) {
+				error("AutoDetect=metal supports whole-device GPU GRES, not %s",
+				      conf->name);
+				list_iterator_destroy(itr);
+				return ESLURM_INVALID_GRES;
+			}
+			if (xstrcmp(conf->name, "gpu"))
+				continue;
+			if (conf->file || conf->cpus || conf->links ||
+			    (!(conf->config_flags & GRES_CONF_ENV_DEF) &&
+			     (conf->config_flags & GRES_CONF_ENV_SET))) {
+				error("AutoDetect=metal does not support File, Cores, Links or vendor GPU visibility flags");
+				list_iterator_destroy(itr);
+				return ESLURM_INVALID_GRES;
+			}
+		}
+		list_iterator_destroy(itr);
 	}
 
 	gres_list_system = gpu_g_get_system_gpu_list(node_config);

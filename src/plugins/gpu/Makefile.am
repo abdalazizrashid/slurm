@@ -2,6 +2,9 @@
 
 SUBDIRS = common generic
 
+if BUILD_METAL
+SUBDIRS += metal
+endif
 
 if LINUX_BUILD
 SUBDIRS += nrt nvidia

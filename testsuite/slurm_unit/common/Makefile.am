@@ -22,11 +22,24 @@ TESTS = auth-fork-test \
 	fetch_config-test \
 	conmgr-delay-test \
 	conmgr-quiesce-test \
+	gres-id-test \
 	srun-pty-accept-test \
+	gpu-energy-test \
 	log-test
 
+gres_id_test_LDADD = $(LDADD) \
+	$(top_builddir)/src/plugins/gres/common/libgres_common.la
 
+gpu_energy_test_LDADD = $(LDADD) \
+	$(top_builddir)/src/plugins/jobacct_gather/common/libjobacct_gather_common.la
 
+if BUILD_METAL
+TESTS += metal-smoke
+metal_smoke_SOURCES = metal-smoke.m
+metal_smoke_LIBTOOLFLAGS = --tag=CC
+metal_smoke_OBJCFLAGS = $(METAL_OBJCFLAGS)
+metal_smoke_LDADD = $(METAL_LIBS)
+endif
 
 if DARWIN_BUILD
 TESTS += darwin-proc-test darwin-pgid-test darwin-limits-test \
@@ -38,6 +51,8 @@ darwin_launch_test_SOURCES = darwin-launch-test.c \
 	$(top_srcdir)/src/common/darwin_launch.c \
 	$(top_srcdir)/src/common/darwin_limits.c
 darwin_launch_test_LDADD = -ldl
+if BUILD_METAL
+endif
 topology_load_test_CPPFLAGS = $(AM_CPPFLAGS) \
 	-DTOPOLOGY_BUILD_DIR='"$(abs_top_builddir)/src/plugins/topology"'
 darwin_proc_test_SOURCES = darwin-proc-test.c \

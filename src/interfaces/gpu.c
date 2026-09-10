@@ -271,6 +271,15 @@ static char *_get_gpu_type(void)
 		return "gpu/nvidia";
 	}
 
+	if (autodetect_flags & GRES_AUTODETECT_GPU_METAL) {
+#ifdef HAVE_METAL
+		return "gpu/metal";
+#else
+		error("AutoDetect=metal requires Slurm built with Metal support");
+		return "gpu/metal"; /* Fail plugin loading, not generic fallback. */
+#endif
+	}
+
 	return "gpu/generic";
 }
 
@@ -314,10 +323,11 @@ static void _gpu_plugin_init_full(node_config_load_t *node_conf)
 {
 	char *type;
 	static const uint32_t probe_order[] = {
-		GRES_AUTODETECT_GPU_NVML,
-		GRES_AUTODETECT_GPU_NVIDIA,
-		GRES_AUTODETECT_GPU_RSMI,
-		GRES_AUTODETECT_GPU_ONEAPI,
+#ifdef HAVE_METAL
+		GRES_AUTODETECT_GPU_METAL,
+#endif
+		GRES_AUTODETECT_GPU_NVML,  GRES_AUTODETECT_GPU_NVIDIA,
+		GRES_AUTODETECT_GPU_RSMI,  GRES_AUTODETECT_GPU_ONEAPI,
 		GRES_AUTODETECT_GPU_NRT,
 	};
 
