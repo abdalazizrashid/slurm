@@ -14,6 +14,7 @@ check_PROGRAMS = \
 	$(TESTS)
 
 TESTS = stepd-inventory-test \
+	conmgr-quiesce-test \
 	log-test
 
 

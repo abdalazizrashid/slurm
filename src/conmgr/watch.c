@@ -1508,7 +1508,8 @@ static void _inspect_connections(const bool shutdown, void *arg)
 
 	mgr.inspecting = false;
 
-	if (send_signal)
+	/* A quiesce request also waits for this inspection to finish. */
+	if (send_signal || (mgr.quiesce.requested && mgr.waiting_on_work))
 		EVENT_SIGNAL(&mgr.watch_sleep);
 	slurm_mutex_unlock(&mgr.mutex);
 }
@@ -1858,6 +1859,16 @@ static bool _watch_loop(void)
 			log_flag(CONMGR, "%s: quiesced state waiting on work:%d",
 				 __func__, mgr.work_count);
 			mgr.waiting_on_work = true;
+			return true;
+		} else if (mgr.poll_active || mgr.inspecting) {
+			/*
+			 * Polling and inspections are workerpool jobs outside
+			 * work_count. Drain them before a caller closes fds for
+			 * re-exec, and do not queue replacements below.
+			 */
+			mgr.waiting_on_work = true;
+			if (mgr.poll_active)
+				pollctl_interrupt(__func__);
 			return true;
 		} else {
 			log_flag(CONMGR, "%s: BEGIN: quiesced state", __func__);
