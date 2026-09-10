@@ -54,39 +54,40 @@
 
 static slurm_rlimits_info_t rlimits_info[] = {
 
-		/*  resource,        name,       propagate_flag  */
+/*  resource,        name,       propagate_flag  */
 
 #ifdef RLIMIT_CPU
-		{ RLIMIT_CPU,      "CPU",      PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_CPU, "CPU", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_FSIZE
-		{ RLIMIT_FSIZE,    "FSIZE",    PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_FSIZE, "FSIZE", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_DATA
-		{ RLIMIT_DATA,     "DATA",     PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_DATA, "DATA", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_STACK
-		{ RLIMIT_STACK,    "STACK",    PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_STACK, "STACK", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_CORE
-		{ RLIMIT_CORE,     "CORE",     PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_CORE, "CORE", PROPAGATE_RLIMITS_NOT_SET },
 #endif
-#ifdef RLIMIT_RSS
-		{ RLIMIT_RSS,      "RSS",      PROPAGATE_RLIMITS_NOT_SET },
+/* Darwin aliases RSS to AS; glibc uses enum values, not preprocessor values. */
+#if defined(RLIMIT_RSS) && !defined(__APPLE__)
+	{ RLIMIT_RSS, "RSS", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_NPROC
-		{ RLIMIT_NPROC,    "NPROC",    PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_NPROC, "NPROC", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_NOFILE
-		{ RLIMIT_NOFILE,   "NOFILE",   PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_NOFILE, "NOFILE", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_MEMLOCK
-		{ RLIMIT_MEMLOCK,  "MEMLOCK",  PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_MEMLOCK, "MEMLOCK", PROPAGATE_RLIMITS_NOT_SET },
 #endif
 #ifdef RLIMIT_AS
-		{ RLIMIT_AS,       "AS",       PROPAGATE_RLIMITS_NOT_SET },
+	{ RLIMIT_AS, "AS", PROPAGATE_RLIMITS_NOT_SET },
 #endif
-		{ 0,               NULL,       PROPAGATE_RLIMITS_NOT_SET }
+	{ 0, NULL, PROPAGATE_RLIMITS_NOT_SET }
 };
 
 
