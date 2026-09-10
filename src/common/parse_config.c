@@ -458,13 +458,13 @@ static void _compute_hash_val(uint32_t *hash_val, char *line)
 	}
 }
 
-
 /*
  * Reads the next line from the "file" into buffer "buf".
  *
  * Concatenates together lines that are continued on
  * the next line by a trailing "\".  Strips out comments,
  * replaces escaped "\#" with "#", and replaces "\\" with "\".
+ * Returns the number of physical lines read, or SLURM_ERROR on read failure.
  */
 static int _get_next_line(char *buf, int buf_size,
 			  uint32_t *hash_val, FILE *file)
@@ -487,6 +487,8 @@ static int _get_next_line(char *buf, int buf_size,
 			break;
 		}
 	}
+	if (ferror(file))
+		return SLURM_ERROR;
 	/* _strip_cr_nl(buf); */ /* not necessary */
 	_strip_escapes(buf);
 
@@ -1241,6 +1243,7 @@ int s_p_parse_file(s_p_hashtbl_t *hashtbl, uint32_t *hash_val, char *filename,
 	int line_number;
 	int merged_lines;
 	int inc_rc;
+	int read_errno = 0;
 	struct stat stat_buf;
 	char *line = NULL;
 	bool ignore_new = (flags & PARSE_FLAGS_IGNORE_NEW);
@@ -1262,15 +1265,21 @@ int s_p_parse_file(s_p_hashtbl_t *hashtbl, uint32_t *hash_val, char *filename,
 		if (stat(filename, &stat_buf) >= 0)
 			break;
 	}
-	if (stat_buf.st_size == 0) {
-		info("s_p_parse_file: file \"%s\" is empty", filename);
-		return SLURM_SUCCESS;
+	if (S_ISDIR(stat_buf.st_mode)) {
+		errno = EISDIR;
+		error("%s: unable to read \"%s\": %m", __func__, filename);
+		return SLURM_ERROR;
 	}
 	f = fopen(filename, "r");
 	if (f == NULL) {
 		error("s_p_parse_file: unable to read \"%s\": %m",
 		      filename);
 		return SLURM_ERROR;
+	}
+	if (stat_buf.st_size == 0) {
+		info("s_p_parse_file: file \"%s\" is empty", filename);
+		fclose(f);
+		return SLURM_SUCCESS;
 	}
 
 	/* Buffer needs one extra byte for trailing '\0' */
@@ -1318,9 +1327,16 @@ int s_p_parse_file(s_p_hashtbl_t *hashtbl, uint32_t *hash_val, char *filename,
 		}
 		line_number += merged_lines;
 	}
+	if (merged_lines < 0) {
+		read_errno = errno;
+		error("%s: unable to read \"%s\": %m", __func__, filename);
+		rc = SLURM_ERROR;
+	}
 
 	xfree(line);
 	fclose(f);
+	if (read_errno)
+		errno = read_errno;
 	return rc;
 }
 

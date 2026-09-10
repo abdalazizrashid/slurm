@@ -14,6 +14,7 @@ check_PROGRAMS = \
 	$(TESTS)
 
 TESTS = scontrol-job-id-test \
+	parse-config-read-test \
 	stepd-inventory-test \
 	conmgr-quiesce-test \
 	log-test
