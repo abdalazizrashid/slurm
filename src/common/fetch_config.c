@@ -60,7 +60,7 @@ strong_alias(close_memfd, slurm_close_memfd);
 
 static char *slurmd_config_files[] = {
 	"acct_gather.conf",   "cgroup.conf",
-	"cli_filter.lua",
+	"cli_filter.lua",     "darwin.conf",
 	"gres.conf",          "helpers.conf",
 	"job_container.conf", "mpi.conf",
 	"namespace.yaml",     "oci.conf",

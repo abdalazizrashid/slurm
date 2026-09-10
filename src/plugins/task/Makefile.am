@@ -2,6 +2,9 @@
 
 SUBDIRS =
 
+if DARWIN_BUILD
+SUBDIRS += darwin
+endif
 
 if !DARWIN_BUILD
 SUBDIRS += affinity

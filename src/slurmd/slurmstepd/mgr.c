@@ -82,6 +82,7 @@
 
 #include "src/common/cbuf.h"
 #include "src/common/cpu_frequency.h"
+#include "src/common/darwin_launch.h"
 #include "src/common/env.h"
 #include "src/common/fd.h"
 #include "src/common/forward.h"
@@ -3405,6 +3406,14 @@ static int _run_script_as_user(const char *name, const char *path, int max_wait,
 		 */
 		_exec_wait_child_wait_for_parent (ei);
 
+#ifdef __APPLE__
+		/* This sibling of the task did not inherit its launch policies. */
+		if ((rc = darwin_launch_apply_epilog())) {
+			error("Cannot apply native %s policy: %s", name,
+			      slurm_strerror(rc));
+			_exit(127);
+		}
+#endif
 		while (1) {
 			execve(path, argv, env);
 			error("execve(%s): %m", path);

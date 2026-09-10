@@ -4,6 +4,7 @@ man5_MANS = \
 	acct_gather.conf.5 \
 	burst_buffer.conf.5 \
 	cgroup.conf.5 \
+	darwin.conf.5 \
 	gres.conf.5 \
 	helpers.conf.5 \
 	job_container.conf.5 \
@@ -22,6 +23,7 @@ generated_html = \
 	acct_gather.conf.html \
 	burst_buffer.conf.html \
 	cgroup.conf.html \
+	darwin.conf.html \
 	gres.conf.html \
 	helpers.conf.html \
 	job_container.conf.html \

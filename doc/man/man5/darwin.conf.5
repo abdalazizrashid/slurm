@@ -1,0 +1,82 @@
+.TH "darwin.conf" "5" "Slurm Configuration File" "Slurm 26.11" "Slurm Configuration File"
+
+.SH "NAME"
+darwin.conf \- Slurm configuration file for native macOS task controls
+
+.SH "DESCRIPTION"
+\fBdarwin.conf\fR defines administrator policies for \fBtask/darwin\fR.
+It must be in the same directory as the selected \fBslurm.conf\fR.
+Configless nodes receive it with the other Slurm configuration files.
+Selecting \fBTaskPlugin=task/darwin\fR requires a readable regular file; an empty or
+comments-only file leaves all native policies disabled.
+Use \fBTaskPlugin=task/none\fR when these task controls are not wanted.
+.LP
+Parameter names are case insensitive. Text following a "#" is a comment
+through the end of the line. Numeric values are unsigned integers without
+suffixes. One MiB is 1,048,576 bytes. Restart Slurm daemons after changing this
+file; existing steps retain their previously loaded policy.
+Keep the file and its containing directory administrator controlled.
+.LP
+These policies are independent of job CPU and memory allocations and the job
+time limit. They do not provide hard aggregate CPU bandwidth, a shared
+physical-memory budget, CPU pinning or complete device isolation.
+Missing configuration, invalid values and unavailable requested controls
+cause initialization or task launch to fail.
+
+.SH "PARAMETERS"
+.TP
+\fBPerProcessCPUTimeSeconds\fR
+Hard \fBRLIMIT_CPU\fR ceiling on each process's accumulated CPU seconds,
+summed over its threads. The default is 0 (disabled).
+A nonzero value must fit below the platform's \fBRLIM_INFINITY\fR value.
+The hard limit is lowered and the soft limit is lowered only as needed to
+fit within it; stricter existing values are preserved.
+The ceiling is inherited across fork and exec, but CPU usage is counted
+separately for each process. This is not a CPU rate or a shared job-time budget.
+It applies to task prologs and task epilogs as well as the task executable.
+.IP
+
+.TP
+\fBPerProcessAddressSpaceMiB\fR
+Hard \fBRLIMIT_AS\fR ceiling on each process's virtual address space, in MiB.
+The default is 0 (disabled).
+The converted byte value must fit below the platform's \fBRLIM_INFINITY\fR
+value. Stricter existing hard and soft limits are preserved, and the ceiling
+is inherited across fork and exec.
+Task prologs and task epilogs receive the same ceiling.
+Reserved mappings count even when they consume little physical memory.
+Do not derive this setting directly from a job's physical-memory request.
+Darwin aliases \fBRLIMIT_RSS\fR to \fBRLIMIT_AS\fR; Slurm exposes AS alone
+and rejects an explicit RSS propagation request on Darwin.
+.IP
+
+.SH "LIMITATIONS"
+\fBtask/darwin\fR rejects explicit CPU/NUMA binding masks, CPU/GPU frequency
+controls, \fBTaskPluginParam=OOMKillStep\fR and a running job's aggregate
+memory-limit reduction. Attaching an external PID to a Slurm extern step is
+unsupported on Darwin, even with native policies disabled. Launch policies
+cannot be applied to already running processes. Normal task children and their
+observed descendants remain eligible for process tracking.
+.LP
+\fBJobAcctGatherParams=OverMemoryKill\fR is a separate sampled policy.
+It may cancel a job after observing excess usage, but cannot prevent memory
+allocation between samples.
+
+.SH "EXAMPLE"
+In \fBslurm.conf\fR:
+.nf
+TaskPlugin=task/darwin
+.fi
+.LP
+In \fBdarwin.conf\fR:
+.nf
+PerProcessCPUTimeSeconds=3600
+PerProcessAddressSpaceMiB=0
+.fi
+.LP
+This example limits each process to 3600 CPU seconds. The address-space limit
+remains disabled; a job's aggregate CPU use is not limited to 3600 seconds.
+
+.SH "SEE ALSO"
+\fBslurm.conf\fR(5), \fBgres.conf\fR(5), \fBsrun\fR(1),
+\fBsetrlimit\fR(2)

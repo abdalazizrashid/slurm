@@ -1,0 +1,9 @@
+# Required beside slurm.conf when TaskPlugin=task/darwin is selected.
+# An empty or comments-only file explicitly leaves these controls disabled.
+# These are per-process limits, independent of a job's --cpus/--mem request.
+# Choose site policy after testing the intended applications.
+# See darwin.conf(5) for units, defaults and deployment requirements.
+# PerProcessCPUTimeSeconds=0
+# PerProcessAddressSpaceMiB=0
+#
+# Hard aggregate CPU/RAM quotas and complete device isolation are unavailable.

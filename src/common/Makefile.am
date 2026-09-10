@@ -26,6 +26,10 @@ libcommon_la_SOURCES =				\
 	cron.h					\
 	daemonize.c				\
 	daemonize.h				\
+	darwin_launch.c				\
+	darwin_launch.h				\
+	darwin_limits.c				\
+	darwin_limits.h				\
 	data.c					\
 	data.h					\
 	duplex_relay.c				\
