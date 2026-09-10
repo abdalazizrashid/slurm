@@ -13,7 +13,8 @@ LDADD = -ldl -lpthread $(LIB_SLURM)
 check_PROGRAMS = \
 	$(TESTS)
 
-TESTS = stepd-inventory-test \
+TESTS = scontrol-job-id-test \
+	stepd-inventory-test \
 	conmgr-quiesce-test \
 	log-test
 

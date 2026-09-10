@@ -121,6 +121,7 @@ static char *_next_job_id(void)
 {
 	static hostlist_t *hl = NULL;
 	static char *save_ptr = NULL;
+	static bool first_token = true;
 	static char *next_job_id = NULL;
 	static char *task_id_spec = NULL;
 	char *job_id_str = NULL, *bracket_ptr, *under_ptr;
@@ -149,9 +150,11 @@ static char *_next_job_id(void)
 
 	/* Get next token */
 	xfree(task_id_spec);
-	if (local_job_str && !save_ptr)	/* Get first token */
+	/* strtok_r may set save_ptr to NULL when it returns the final token. */
+	if (local_job_str && first_token) {
 		job_id_str = strtok_r(local_job_str, "^", &save_ptr);
-	else if (save_ptr)		/* Get next token */
+		first_token = false;
+	} else if (save_ptr) /* Get next token */
 		job_id_str = strtok_r(NULL, "^", &save_ptr);
 
 	if (!job_id_str)	/* No more tokens */
@@ -211,6 +214,7 @@ static char *_next_job_id(void)
 
 fini:	xfree(local_job_str);
 	save_ptr = NULL;
+	first_token = true;
 	return NULL;
 }
 
