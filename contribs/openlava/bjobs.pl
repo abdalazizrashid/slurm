@@ -47,7 +47,6 @@ use lib "${FindBin::Bin}/../lib/perl";
 use autouse 'Pod::Usage' => qw(pod2usage);
 use Slurm ':all';
 use Slurmdb ':all'; # needed for getting the correct cluster dims
-use Switch;
 
 ################################################################################
 # $humanReadableTime = _hr_time($epochTime)
@@ -147,10 +146,12 @@ my $line = 0;
 foreach my $job (@{$resp->{job_array}}) {
 	my $state = $job->{'job_state'};
 
-	switch($state) {
-		case [JOB_RUNNING]   { $job->{job_state_str} = 'RUN' }
-		case [JOB_PENDING]   { $job->{job_state_str} = 'PEND' }
-		case [JOB_SUSPENDED] { $job->{job_state_str} = 'SUSP' }
+	if ($state == JOB_RUNNING) {
+		$job->{job_state_str} = 'RUN';
+	} elsif ($state == JOB_PENDING) {
+		$job->{job_state_str} = 'PEND';
+	} elsif ($state == JOB_SUSPENDED) {
+		$job->{job_state_str} = 'SUSP';
 	}
 
 	next unless $job->{job_state_str};

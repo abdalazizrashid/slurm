@@ -66,7 +66,8 @@ usable, and outside IPC brokers can still perform GPU work. This does not
 provide selective-device authorization, GPU memory or time quotas, or complete
 device isolation.</p>
 <p>See <a href="darwin.conf.html">darwin.conf(5)</a> for configuration and
-<code>contribs/macos/gpu-access.md</code> for deployment requirements.</p>
+<code>share/slurm/macos/gpu-access.md</code>, installed from
+<code>contribs/macos/gpu-access.md</code>, for deployment requirements.</p>
 
 <h2>Memory and accounting</h2>
 <p>Unified memory is shared with the CPU. The working-set recommendation is a
@@ -82,7 +83,8 @@ an assigned registry ID and fails if that device cannot be found.</p>
 <p>Drain a node and finish its jobs before changing its attached GPUs. Test
 hot-plug and sleep/resume behavior before relying on them in production.
 Registry IDs identify devices across processes but may change after a reboot or
-hot-plug event.</p>
+hot-plug event. For general node configuration, see
+<a href="macos.html">Native macOS support</a>.</p>
 
 <h2>API references</h2>
 <ul>

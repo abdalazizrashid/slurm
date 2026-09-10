@@ -1889,12 +1889,23 @@ Configurable values at present are:
 .IP
 .RS
 .TP 20
-\fBjobacct_gather/cgroup\fR (recommended)
+\fBjobacct_gather/cgroup\fR (recommended on Linux)
 Collect cpu and memory statistics by reading the task's cgroup directory
 interfaces (e.g. memory.stat, cpu.stat) by issuing a call to the configured
 CgroupPlugin (see "man cgroup.conf").
 This mechanism ignores JobAcctGatherParams=UsePSS or NoShared since these are
 used only when reading memory usage from the proc filesystem.
+.IP
+
+.TP
+\fBjobacct_gather/darwin\fR
+Collect process CPU time, resident and virtual memory, and available I/O
+statistics through native macOS process APIs. Uses the configured process
+tracker's membership and checks process birth identity to avoid attributing
+a reused PID. Short-lived descendants can exit between samples; summed RSS can
+count shared pages more than once. Unsupported frequency, energy and GPU usage
+counters are unavailable. This plugin does not impose a hard shared CPU or
+physical-memory budget. See \fIhttps://slurm.schedmd.com/macos.html\fR.
 .IP
 
 .TP
@@ -3674,7 +3685,7 @@ which are children of processes it spawns for a user job step.
 identify all processes associated with a job since processes
 can become a child of the init process (when the parent process
 terminates) or change their process group.
-To reliably track all processes, "proctrack/cgroup" is highly recommended.
+On Linux, "proctrack/cgroup" is highly recommended to reliably track all processes.
 \fBNOTE\fR: The \fBNamespaceType\fR applies to a job namespace isolation,
 while \fBProctrackType\fR applies to job resource limits and tracking.
 Acceptable values at present include:
@@ -3689,6 +3700,19 @@ for systems with cgroup support.
 .IP
 
 .TP
+\fBproctrack/darwin\fR
+Uses native macOS process notifications and periodic lineage discovery.
+Retains the birth identity of observed descendants after they change process
+group, call setsid or become reparented. A fast fork/exit/reparenting sequence
+can escape discovery, and membership cannot be fully reconstructed after a
+step daemon crash. This is not an escape-proof process container; detected
+cleanup uncertainty is reported as an error. Attaching an already running
+external PID to a Slurm extern step is unsupported on Darwin. Normal task
+children and their observed descendants are tracked. It is optional and does not
+change the Darwin default. See \fIhttps://slurm.schedmd.com/macos.html\fR.
+.IP
+
+.TP
 \fBproctrack/linuxproc\fR
 Uses linux process tree using parent process IDs.
 .IP
@@ -3697,7 +3721,7 @@ Uses linux process tree using parent process IDs.
 \fBproctrack/pgid\fR
 Uses Process Group IDs.
 .br
-\fBNOTE\fR: This is the default for the BSD family.
+\fBNOTE\fR: This is the default for macOS and the BSD family.
 .RE
 .IP
 
@@ -3781,6 +3805,8 @@ This container may be used for user processes not launched under Slurm control,
 for example pam_slurm_adopt may place processes launched through a direct user
 login into this container. If using pam_slurm_adopt, then ProcTrackType must be
 set to \fBproctrack/cgroup\fR.
+Attaching an already running external PID to an extern step is unsupported
+on Darwin; the Contain flag does not enable that operation there.
 
 Setting the Contain flag implicitly sets the Alloc flag.
 .IP
@@ -3977,6 +4003,9 @@ The maximum number of processes available
 \fBRSS\fR
 The maximum resident set size. Note that this only has effect with Linux
 kernels 2.4.30 or older or BSD.
+On Darwin, RSS aliases the AS limit and an explicit RSS propagation request
+is rejected. Use AS for virtual-address limits; it is not a physical-memory
+budget.
 .IP
 
 .TP
@@ -6803,11 +6832,21 @@ This enables the \-\-cpu\-bind and/or \-\-mem\-bind srun options.
 enables process containment to specified resources using Cgroups cpuset
 interface. This enables the \-\-cpu\-bind and/or \-\-mem\-bind srun options.
 \fBNOTE\fR: see "man cgroup.conf" for configuration details.
+.IP
+
+.TP
+\fBtask/darwin\fR
+Applies optional native macOS per-process CPU-time and virtual-address limits,
+with separately enabled initial-image footprint and fresh GPU-connection
+policies. Requires \fBdarwin.conf\fR beside \fBslurm.conf\fR; all policies
+are disabled by default. Does not provide CPU pinning, hard aggregate CPU/RAM
+quotas or complete GPU isolation. The footprint and GPU-connection options
+use private APIs and require deployment qualification. See \fBdarwin.conf\fR(5).
 .RE
 .IP
 
 .RS
-\fBNOTE\fR: It is recommended to stack \fBtask/cgroup,task/affinity\fR together
+\fBNOTE\fR: On Linux, it is recommended to stack \fBtask/cgroup,task/affinity\fR together
 when configuring TaskPlugin, and setting \fBConstrainCores=yes\fR in
 \fBcgroup.conf\fR. This setup uses the task/affinity plugin for setting the
 cpu mask for tasks and uses the task/cgroup plugin to fence tasks into the

@@ -158,7 +158,7 @@ wait
 </h2>
 
 <p>If <i>AutoDetect=nvml</i>, <i>AutoDetect=nvidia</i>, <i>AutoDetect=rsmi</i>,
-<i>AutoDetect=nrt</i>, or <i>AutoDetect=oneapi</i> are set in <i>gres.conf</i>,
+<i>AutoDetect=nrt</i>, <i>AutoDetect=metal</i>, or <i>AutoDetect=oneapi</i> are set in <i>gres.conf</i>,
 configuration details will automatically be filled in for any system-detected
 GPU. This removes the need to explicitly configure GPUs in gres.conf, though the
 <i>Gres=</i> line in slurm.conf is still required in order to tell slurmctld how
@@ -170,6 +170,10 @@ installed on the node and found during Slurm configuration in order to work.
 Both <i>AutoDetect=nvml</i> and <i>AutoDetect=nvidia</i> detect NVIDIA GPUs.
 <i>AutoDetect=nvidia</i> (added in Slurm 24.11) doesn't require the
 nvml library to be installed, but doesn't detect MIGs or NVlinks.</p>
+
+<p><i>AutoDetect=metal</i> discovers native macOS GPUs without device files.
+See <a href="metal.html">Metal GPU scheduling</a> for configuration, advisory
+application selection, and unavailable enforcement and accounting capabilities.</p>
 
 <p>When AutoDetect needs to load a GPU management library as stated above it
 will usually unload this library immediately after the slurmd is started

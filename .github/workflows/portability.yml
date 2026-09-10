@@ -1,0 +1,68 @@
+name: Native portability
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-26, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Linux development dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool \
+            pkg-config libglib2.0-dev libhwloc-dev libjson-c-dev libyaml-dev \
+            liblz4-dev libhttp-parser-dev liblua5.4-dev check libpam0g-dev \
+            libssl-dev libdbus-1-dev perl libperl-dev
+      - name: macOS development dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install autoconf automake libtool pkgconf glib hwloc json-c \
+            libyaml lz4 http-parser lua check openssl@3
+      - name: Build private MUNGE dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --location --retry 3 \
+            https://github.com/dun/munge/releases/download/munge-0.5.18/munge-0.5.18.tar.xz \
+            --output munge.tar.xz
+          echo '39c3ec6ef5604bfa206e8aa10fc05d5119040f6de4a554bc0fb98ca1aed838dc  munge.tar.xz' \
+            | shasum -a 256 --check
+          tar -xf munge.tar.xz
+          cd munge-0.5.18
+          args=("--prefix=$RUNNER_TEMP/munge")
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            args+=("--with-openssl-prefix=$(brew --prefix openssl@3)")
+          fi
+          ./configure "${args[@]}"
+          make -j 4
+          make install
+      - name: Configure, build, install and test
+        run: |
+          sh testsuite/macos/build-ci.sh "$RUNNER_TEMP/slurm-build" \
+            "$RUNNER_TEMP/slurm-install" "$RUNNER_TEMP/munge"
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: portability-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/slurm-build/logs
+            ${{ runner.temp }}/slurm-build/config.log
+            ${{ runner.temp }}/slurm-build/testsuite/slurm_unit/common/**/*.log
+            ${{ runner.temp }}/slurm-build/testsuite/slurm_unit/common/**/*.trs

@@ -30,7 +30,7 @@ install-bashcompDATA: $(bashcomp_DATA)
 	test -z "$(DESTDIR)$(bashcompdir)" || $(mkdir_p) "$(DESTDIR)$(bashcompdir)"
 	install -v -m 644 "$(top_srcdir)/contribs/slurm_completion_help/$(bashcomp_DATA)" "$(DESTDIR)$(bashcompdir)/$(bashcomp_DATA)" || true
 	@list='$(bashcompbin)'; for p in $$list; do \
-	  ln -vsf "$(DESTDIR)$(bashcompdir)/$(bashcomp_DATA)" "$(DESTDIR)$(bashcompdir)/$$p" || true; \
+	  ln -vsf "$(bashcomp_DATA)" "$(DESTDIR)$(bashcompdir)/$$p" || true; \
 	  done
 
 uninstall-bashcompDATA:

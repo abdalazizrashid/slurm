@@ -82,4 +82,5 @@ also uses the `IOAccelerator` filter.
 `darwin-gpu-sandbox-test` checks a Metal baseline, connection denial and inherited
 restrictions through exec, fork/exec, spawn, session changes and profile reset.
 Its children require no root. A machine without a GPU skips this test; enabling
-the policy still requires a successful probe.
+the policy still requires a successful probe. See the
+[administration README](README.md#testing) for tests through Slurm jobs.

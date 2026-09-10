@@ -67,6 +67,8 @@ Documentation for other versions of Slurm is distributed with the code</b></p>
 	<td>Slurm burst buffer configuration.</td></tr>
 <tr><td><a href="cgroup.conf.html">cgroup.conf</a></td>
 	<td>Slurm configuration file for the cgroup support.</td></tr>
+<tr><td><a href="darwin.conf.html">darwin.conf</a></td>
+	<td>Native macOS task control configuration.</td></tr>
 <tr><td><a href="gres.conf.html">gres.conf</a></td>
 	<td>Slurm configuration file for generic resource management.</td></tr>
 <tr><td><a href="helpers.conf.html">helpers.conf</a></td>

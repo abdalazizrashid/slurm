@@ -23,9 +23,11 @@ Currently supported distributions include:
 </ul>
 </li>
 <li><b>NetBSD</b> &mdash; Limited support, not actively tested.</li>
-<li><b>macOS</b> &mdash; Slurm has run on macOS in the past, but does not
-currently. It should be possible to fix this with some adjustments to linker
-and compiler flags, and any patches would be appreciated.
+<li><b>macOS</b> &mdash; The native port supports building clients and daemons
+with Darwin accounting, process tracking, and optional Metal discovery.
+Resource enforcement differs from Linux. See the
+<a href="macos.html">macOS administrator guide</a> for configuration,
+validation status, and limitations.</li>
 </ul>
 
 <h2 id="database">Databases<a class="slurm_link" href="#database"></a></h2>

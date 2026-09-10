@@ -3500,6 +3500,17 @@ Same as \fB\-\-mem\fR
 .IP
 
 .TP
+\fBSLURM_METAL_DEVICE_IDS\fR
+On macOS nodes using \fBgpu/metal\fR, the comma-separated Metal registry IDs
+allocated to the job on the node running the batch script. Each ID is a
+zero-padded, 16-digit hexadecimal value. Job steps can receive different lists
+according to their allocation and task GPU binding. Applications must explicitly
+match these IDs against Metal device \fBregistryID\fR values. This variable is
+advisory: Metal does not interpret it or hide other devices. These are not the
+numeric Slurm GPU indices in \fBSLURM_JOB_GPUS\fR or \fBSLURM_STEP_GPUS\fR.
+.IP
+
+.TP
 \fBSLURM_NETWORK\fR
 Set to the value of the \fB\-\-network\fR option, if specified.
 .IP

@@ -46,6 +46,7 @@ generated_html = \
 	licenses.html \
 	fair_tree.html \
 	mail.html \
+	macos.html \
 	metal.html \
 	man_index.html \
 	mc_support.html \

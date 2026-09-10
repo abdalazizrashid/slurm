@@ -31,6 +31,7 @@ may be found in the <a href="https://slurm.schedmd.com/archive/">archive</a>.
 <a class="slurm_link" href="#administrators"></a></h2>
 <ul>
 <li><a href="quickstart_admin.html">Quick Start Administrator Guide</a></li>
+<li><a href="macos.html">Native macOS Administration</a></li>
 <li><a href="upgrades.html">Upgrade Guide</a></li>
 <li><a href="accounting.html">Accounting</a></li>
 <li><a href="reservations.html">Advanced Resource Reservation Guide</a></li>
@@ -86,6 +87,7 @@ may be found in the <a href="https://slurm.schedmd.com/archive/">archive</a>.
 <li><a href="core_spec.html">Core Specialization</a></li>
 <li><a href="gang_scheduling.html">Gang Scheduling</a></li>
 <li><a href="gres.html">Generic Resource (GRES) Scheduling</a></li>
+<li><a href="metal.html">Metal GPU Scheduling on macOS</a></li>
 <li><a href="high_throughput.html">High Throughput Computing Guide</a></li>
 <li><a href="preempt.html">Preemption</a></li>
 <li><a href="qos.html">Quality of Service (QOS)</a></li>

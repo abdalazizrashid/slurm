@@ -4426,6 +4426,17 @@ Node local task ID for the process within a job.
 .IP
 
 .TP
+\fBSLURM_METAL_DEVICE_IDS\fR
+On macOS nodes using \fBgpu/metal\fR, the comma-separated Metal registry IDs
+assigned to the local job or step allocation. GPU task binding can narrow this
+list for each task. Each ID is a zero-padded, 16-digit hexadecimal value.
+Applications must explicitly match these IDs against Metal device
+\fBregistryID\fR values. This variable is advisory: Metal does not interpret it
+or hide other devices. These are not the numeric Slurm GPU indices in
+\fBSLURM_JOB_GPUS\fR or \fBSLURM_STEP_GPUS\fR.
+.IP
+
+.TP
 \fBSLURM_NETWORK\fR
 Set to the value of the \fB\-\-network\fR option, if specified.
 .IP

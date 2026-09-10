@@ -436,6 +436,7 @@ AC_CONFIG_FILES([Makefile
 		 auxdir/Makefile
 		 contribs/Makefile
 		 contribs/lua/Makefile
+		 contribs/macos/Makefile
 		 contribs/nss_slurm/Makefile
 		 contribs/openlava/Makefile
 		 contribs/pam/Makefile

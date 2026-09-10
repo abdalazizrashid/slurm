@@ -16,7 +16,8 @@ qsub:
 mpiexec:
 generate_pbs_nodefile:
 
-_perldir := $(shell perl -MConfig -e 'if (($$ENV{SLURM_PERL_INSTALLDIRS} || "site") eq "vendor") { print $$Config{installvendorarch} } else { my $$T = $$Config{installsitearch}; my $$P = $$Config{siteprefix}; $$T =~ s|^\Q$$P\E||; print "$(prefix)$$T" }')
+perlpath = /usr/bin/perl
+_perldir := $(shell $(perlpath) "$(top_srcdir)/contribs/perlapi/perl-install-dirs.pl" "$(prefix)")
 
 install-binSCRIPTS: $(bin_SCRIPTS)
 	@$(NORMAL_INSTALL)

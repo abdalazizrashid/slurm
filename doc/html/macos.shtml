@@ -1,0 +1,296 @@
+<!--#include virtual="header.txt"-->
+
+<h1>Native macOS</h1>
+
+<p>Slurm can run natively on macOS as a client, controller or compute node.
+Mac compute nodes support concurrent jobs, native process accounting and Metal
+GPU discovery. Optional task and process-tracking plugins provide the controls
+described under <a href="#capabilities">Accounting and enforcement</a>.</p>
+
+<h2 id="platforms">Platform requirements<a class="slurm_link" href="#platforms"></a></h2>
+
+<p>The initial target is macOS 26 on Apple Silicon. Intel Macs and older
+macOS releases require separate qualification; the CI matrix includes additional
+platforms to detect portability failures. Metal discovery uses macOS 10.15 APIs,
+which alone do not establish support for the complete port on that release.
+The optional private task policies require testing on each intended OS and GPU.
+See <a href="#validation">Testing</a>.</p>
+
+<h2 id="build">Build and install<a class="slurm_link" href="#build"></a></h2>
+
+<p>Use a native Apple compiler and macOS SDK, a C++ compiler, Perl, GNU Make,
+and Python 3 for the test scripts and documentation. Git checkouts also require
+Autoconf, Automake, GNU Libtool, pkg-config and the GLib aclocal macros. Regenerate
+from source inputs with <code>autoreconf -fi</code>; submit changes to
+<code>configure.ac</code>, macros and <code>Makefile.am</code>, following
+<code>CONTRIBUTING.md</code>.</p>
+
+<p>Install MUNGE and the libraries needed by the selected plugins first. A
+package manager may provide these libraries, or they can be built into a site
+prefix. Use a MUNGE release with native macOS support, such as 0.5.18, and match
+its authentication configuration across the cluster.</p>
+
+<p>The following example assumes that dependencies are installed together under
+<code>/opt/slurm-deps</code>. With separate package prefixes, pass each dependency's
+own prefix. Export <code>PKG_CONFIG_PATH</code> for Check, Lua and other libraries
+whose package metadata is outside the default search path. Shared libraries must
+also remain available at runtime.</p>
+
+<pre>
+# From a clean source checkout:
+export CC=clang CXX=clang++
+export ACLOCAL_PATH=/opt/slurm-deps/share/aclocal
+autoreconf -fi
+mkdir ../slurm-build
+cd ../slurm-build
+export PKG_CONFIG_PATH=/opt/slurm-deps/lib/pkgconfig
+../slurm-source/configure --prefix=/opt/slurm \
+  --with-munge=/opt/slurm-deps --with-hwloc=/opt/slurm-deps \
+  --with-json=/opt/slurm-deps --with-yaml=/opt/slurm-deps \
+  --with-lz4=/opt/slurm-deps --with-libhttp-parser=/opt/slurm-deps
+make -j4
+make install
+# Optional contributed PMI client libraries and administration examples:
+make -C contribs/pmi all install
+make -C contribs/pmi2 all install
+make -C contribs/macos install
+</pre>
+
+<p>Replace <code>../slurm-source</code> with the actual source directory. Use a
+writable prefix for an unprivileged development installation. Normal multiuser
+service binaries, libraries and configuration must be administrator controlled.
+Configure detects Darwin plugin availability and linker behavior; it does not
+require GNU ld or objcopy to embed command help.</p>
+
+<table>
+<tr><th>Optional component</th><th>Dependency/configuration</th></tr>
+<tr><td>Topology, JSON/YAML, compression</td><td>hwloc, json-c, libyaml and LZ4;
+<code>--with-hwloc</code>, <code>--with-json</code>, <code>--with-yaml</code>,
+<code>--with-lz4</code> accept prefixes.</td></tr>
+<tr><td>REST</td><td>JSON plus libhttp-parser or llhttp. Use
+<code>--with-libhttp-parser=PREFIX</code> or
+<code>--with-llhttp-parser=PREFIX</code>. TLS separately needs s2n-tls via
+<code>--with-s2n=PREFIX</code>. Check the existing REST authentication guide.</td></tr>
+<tr><td>Lua</td><td>Lua development files discoverable through pkg-config;
+<code>--with-lua</code> is a boolean option, not a prefix.</td></tr>
+<tr><td>JWT / auth/slurm</td><td>A compatible libjwt 1.x or 2.x API;
+<code>--with-jwt=PREFIX</code>. libjwt 3.x is not supported by the existing
+configure interface.</td></tr>
+<tr><td>Database</td><td>MySQL/MariaDB client development files and
+<code>mysql_config</code> or <code>mariadb_config</code> on PATH. Alternatively
+<code>--with-mysql_config=DIR</code> selects their executable directory.
+A database service is a separate prerequisite for runtime validation.</td></tr>
+<tr><td>PMIx/MPI</td><td><code>--with-pmix=PREFIX</code>; use compatible MPI,
+PMIx and hwloc builds, and test MPI execution across the intended nodes.</td></tr>
+<tr><td>PAM</td><td>Native OpenPAM is detected from the macOS SDK/libpam.
+The optional pam_slurm module installs below <code>lib/pam</code> on Darwin.
+Configure and test the PAM stack separately. Linux NSS and pam_slurm_adopt
+modules are not built on Darwin.</td></tr>
+<tr><td>Metal</td><td><code>--enable-metal=auto</code> is the default;
+<code>yes</code> requires the framework probe to succeed and <code>no</code>
+omits the plugin. Objective-C ARC, Foundation/Metal and the macOS 10.15 device
+APIs must be available for the selected deployment target.</td></tr>
+</table>
+
+<p>Run <code>slurmrestd</code> with a dedicated service account and group,
+separate from <code>SlurmUser</code>. A root-started service can use
+<code>-u USER [-g GROUP]</code> to clear supplementary groups before changing
+its group and user; omitting <code>-g</code> selects that user's primary group.
+The resulting account must retain access to its configuration, plugins and
+authentication credentials. Direct unprivileged startup requires an already
+suitable group list: supplementary groups must be empty or contain only the
+primary GID. Interactive macOS accounts commonly have additional groups and
+cannot remove them without privilege. Test authenticated REST requests with the
+selected account.</p>
+
+<h2 id="configuration">Compute node configuration<a class="slurm_link" href="#configuration"></a></h2>
+
+<p>Install matching Slurm versions and feature-aware plugins on the controller,
+compute nodes and clients. Use consistent numeric user/group IDs, supplementary
+groups, authentication keys, clock synchronization, and resolvable hostnames.
+Provide matching working directories and application/data paths through shared
+storage or explicit staging. Applications and their dependencies must be built
+for each node's OS.</p>
+
+<p>Run <code>slurmd -C</code> on each Mac and use its reported CPU topology.
+Choose <code>RealMemory</code> below physical memory to leave space for macOS,
+Slurm and other host services. Apple Silicon CPU cores can have different
+performance characteristics; their logical CPU count is not a throughput or
+performance-core guarantee. The following is an illustrative all-Mac compute
+configuration; replace its resources and paths with site values:</p>
+
+<pre>
+ClusterName=macs
+SlurmctldHost=controller
+SlurmUser=slurm
+AuthType=auth/munge
+CredType=cred/munge
+SelectType=select/cons_tres
+SelectTypeParameters=CR_Core_Memory
+ProctrackType=proctrack/pgid
+JobAcctGatherType=jobacct_gather/darwin
+JobAcctGatherFrequency=task=5
+TaskPlugin=task/darwin
+NamespaceType=namespace/none
+StateSaveLocation=/var/db/slurm/controller
+SlurmdSpoolDir=/var/db/slurm/compute
+NodeName=mac01 CPUs=8 RealMemory=14000 Feature=macos
+PartitionName=mac Nodes=mac01 Default=YES MaxTime=01:00:00 State=UP
+</pre>
+
+<p><code>task/darwin</code> requires <code>darwin.conf</code> beside the selected
+<code>slurm.conf</code>; an empty or comments-only file explicitly leaves native
+limits disabled. Copy <code>share/slurm/macos/darwin.conf.example</code> from the
+contributed installation to that directory as <code>darwin.conf</code>, then
+choose a site policy using <a href="darwin.conf.html">darwin.conf(5)</a>.
+Keep the file and its parent directory administrator controlled.
+Use <code>TaskPlugin=task/none</code> if native task controls are not desired.
+Configless deployments must distribute the same <code>darwin.conf</code>.</p>
+
+<p>Darwin uses <code>/var/run</code> for Slurm's runtime root
+(<code>SLURM_RUN_DIR</code> in the implementation); Linux retains
+<code>/run</code>. With <code>auth/slurm</code>, the default local credential
+sockets are <code>/var/run/slurm/sack.socket</code>,
+<code>/var/run/slurmctld/sack.socket</code> and
+<code>/var/run/slurmdbd/sack.socket</code>. Cluster-specific sackd directories
+also live under <code>/var/run</code>. These paths are independent of the
+installation prefix. The service must be able to create its correctly owned
+runtime directory; do not make the runtime root generally writable.</p>
+
+<p>For configless slurmd, downloaded files remain in
+<code>SlurmdSpoolDir/conf-cache</code>. The local client discovery link is
+<code>/var/run/slurm/conf</code>, and the fallback configuration path is
+<code>/var/run/slurm/conf/slurm.conf</code>. Configure launchd explicitly rather
+than relying on a shell's environment. Test the selected authentication stack
+before admitting nodes to the cluster.</p>
+
+<p>Darwin's configless and generated-script support uses owner-only temporary
+files named <code>/tmp/slurm-memfd-XXXXXX</code>, because macOS has no Linux
+memfd pathname namespace. Explicit cleanup and normal process exit remove files
+owned by the creating process; child cleanup preserves its parent's files.
+Replacing the owner with <code>exec</code>, using <code>_exit</code>, or a crash
+or <code>SIGKILL</code> can leave configuration or script content behind.
+Inspect ownership and confirm the
+owning Slurm process has stopped before removing residue; do not remove these
+files while a daemon or script may still use them.</p>
+
+<p>Two jobs each requesting one CPU can run together when resources are available:
+for example <code>srun -p mac -c1 --mem=256M sleep 30</code> in two terminals.</p>
+
+<p><strong>Mixed Linux/macOS clusters:</strong> <code>TaskPlugin</code>,
+<code>ProctrackType</code>, <code>JobAcctGatherType</code> and namespace settings
+are not partition-local controls. Adding a Mac partition does not make Linux
+cgroup settings usable on its nodes. Plan configuration/plugin compatibility
+for every daemon that reads the configuration, including a Linux controller.
+The Darwin plugins are built only on Darwin. A single unmodified global
+configuration selecting them is therefore not automatically a working mixed-OS
+configuration. Validate node-specific configuration delivery and controller
+plugin use end to end, or operate separate OS-specific Slurm clusters and use
+the existing federation mechanisms where appropriate.</p>
+
+<h2 id="capabilities">Accounting and enforcement<a class="slurm_link" href="#capabilities"></a></h2>
+
+<p>Scheduler reservations control admission to a node. They do not impose
+hard aggregate CPU bandwidth or physical-memory quotas. Set application thread
+counts to the allocation and leave memory headroom for the operating system.
+Use node exclusivity when workloads need all resources on a host.</p>
+
+<table>
+<tr><th>Capability</th><th>Darwin behavior</th></tr>
+<tr><td>CPU allocation and binding</td><td>Concurrent CPU allocations are
+supported. Explicit CPU/NUMA binding is rejected by task/darwin. A positive
+CoreSpecCount or a configured CpuSpecList rejects node initialization;
+CoreSpecCount=0 requires no specialization. Public affinity APIs do not provide
+Linux-style CPU binding or core-type placement.</td></tr>
+<tr><td>Accounting</td><td>jobacct_gather/darwin samples CPU time, RSS, virtual
+memory and available I/O, with process birth checks to detect PID reuse.
+Short-lived descendants and usage between samples can be missed. Final task
+wait/rusage supplements sampled totals. Shared pages can be counted more than
+once in summed RSS. Physical footprint, CPU frequency and unsupported counters
+are not exposed as accounting metrics.</td></tr>
+<tr><td>Memory enforcement</td><td>JobAcctGatherParams=OverMemoryKill can cancel
+jobs after observing excess usage. It cannot prevent allocation between samples.
+Missing measurements and process-discovery gaps affect this policy; see
+<code>share/slurm/macos/resource-limits.md</code>.</td></tr>
+<tr><td>Task limits</td><td>task/darwin can lower per-process RLIMIT_CPU and
+RLIMIT_AS. Its optional initial-image footprint cap uses private spawn
+attributes, requires runtime/none and can reset on fork or subsequent exec.
+It is not a shared or task-lifetime RAM limit. See
+<a href="darwin.conf.html">darwin.conf(5)</a>.</td></tr>
+<tr><td>Process tracking</td><td>The default proctrack/pgid follows process-group
+membership; setsid or a group change can escape it. Optional proctrack/darwin
+retains observed descendants after detachment but can miss fast
+fork/exit/reparenting sequences. It reports detected cleanup failures and
+rejects wait-for-children. Neither backend provides containment for untrusted
+jobs. See <code>share/slurm/macos/process-tracking.md</code>.</td></tr>
+<tr><td>External process adoption</td><td>Attaching an already running external
+PID to an extern step is unsupported, including with native policies disabled.
+Normal Slurm-launched tasks and their observed descendants can be tracked.</td></tr>
+<tr><td>GPU access</td><td>Metal GRES scheduling and device selection are
+supported. Selection is advisory. An optional task policy denies new direct
+GPU connections to tasks with no allocated GPU; it uses deprecated/private
+Seatbelt interfaces and requires an empty remote SPANK stack. Existing or
+inherited capabilities and outside brokers remain usable. See
+<a href="metal.html">Metal GPU support</a> and
+<a href="darwin.conf.html">darwin.conf(5)</a>.</td></tr>
+<tr><td>Unsupported controls</td><td>Hard aggregate CPU/RAM quotas, complete GPU
+isolation, GPU frequency control and per-job GPU memory/utilization/energy
+accounting are unavailable. Linux cgroup,
+namespace, task/affinity, procfs and energy plugins cannot be used on Macs.</td></tr>
+</table>
+
+<p>The contributed installation includes detailed task, GPU and process-tracking
+guides in <code>share/slurm/macos</code>. Read them before enabling the optional
+native policies.</p>
+
+<h2 id="operations">Service operation<a class="slurm_link" href="#operations"></a></h2>
+
+<p><code>contribs/macos</code> supplies a renderer and launchd examples for
+slurmd, slurmctld and slurmdbd. They use absolute paths, explicit service users,
+foreground daemons, log files and bounded restart delays. Installation copies
+examples without activating them. Read their README before using
+<code>launchctl bootstrap</code>. Provision state/log directories and MUNGE
+first; launchd does not infer service readiness from these templates.</p>
+
+<p>Use stable reachable node/controller addresses and permit the configured Slurm
+ports plus application traffic through host and network firewalls. Keep compute
+nodes awake while allocated: drain and wait for jobs before planned sleep,
+reboot, service removal or upgrades. A sleeping laptop is an unavailable node;
+configure power settings as part of node provisioning.</p>
+
+<p>Before upgrades, drain nodes, preserve configuration/controller state, and
+follow the normal <a href="upgrades.html">upgrade guide</a>. Verify daemon
+registration, plugins and job completion before resuming nodes. Test crash,
+sleep and restart recovery with the intended workload, including cleanup of
+descendants that may leave process groups.</p>
+
+<h2 id="validation">Testing<a class="slurm_link" href="#validation"></a></h2>
+
+<p><code>testsuite/macos/install-smoke.py</code> checks an installed prefix
+without starting daemons. <code>job-smoke.py</code> runs jobs in a temporary
+same-user cluster with a private MUNGE instance. The optional
+<code>--native-enforcement</code> mode checks the initial-image footprint cap
+and GPU connection policy with supplied workload probes. The contributed
+<code>share/slurm/macos/README.md</code> gives build and invocation examples.</p>
+
+<p><code>privileged-smoke.py</code> tests root-to-worker UID/GID and supplementary
+groups, credentials, output ownership and cross-user job authorization.
+It requires root and an existing worker account. Its <code>--self-check</code>
+mode checks inputs and exits 77 without starting daemons or changing identity.
+The optional <code>--native-enforcement</code> mode also tests footprint
+kill/reset behavior and allocated/unallocated Metal access.</p>
+
+<p>Both job harnesses require the first IPv4 address for the local hostname to
+resolve to loopback. They do not change name resolution or network settings.
+This restriction keeps their temporary clusters local; it is not a production
+cluster requirement. The Metal smoke test skips if no GPU is accessible,
+whereas enabling the GPU connection policy requires a successful hardware
+probe.</p>
+
+<p>Test each deployment's OS, architecture, authentication, user identities and
+multi-node workloads before adding production nodes. Same-user tests do not
+exercise privileged user switching. PAM sessions, step-daemon crash recovery,
+sleep/reboot behavior, attached-GPU changes and optional database/JWT/TLS
+services need separate testing.</p>
+
+<!--#include virtual="footer.txt"-->

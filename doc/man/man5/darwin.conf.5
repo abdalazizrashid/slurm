@@ -96,7 +96,7 @@ perform GPU work, and Mach rights or shared-resource transfers require a
 separate policy. This option does not provide complete GPU isolation or GPU time
 or memory quotas, and does not restrict applications outside Slurm.
 Installed helpers, libraries and configuration must be administrator controlled.
-See \fIcontribs/macos/gpu-access.md\fR for deployment requirements.
+See \fIshare/slurm/macos/gpu-access.md\fR for deployment requirements.
 .IP
 
 .SH "LIMITATIONS"
@@ -133,4 +133,6 @@ disabled; a job's aggregate CPU use is not limited to 3600 seconds.
 \fBslurm.conf\fR(5), \fBgres.conf\fR(5), \fBsrun\fR(1),
 \fBsetrlimit\fR(2)
 .LP
+\fIhttps://slurm.schedmd.com/macos.html\fR
+.br
 \fIhttps://slurm.schedmd.com/metal.html\fR

@@ -95,6 +95,7 @@ described in the process-tracking guide.
 `darwin-launch-test` checks bounded child allocations and fork, exec and shell
 transitions; it needs no root. `darwin-task-test` covers configuration and
 runtime checks. `job-mem-limit-test` covers incomplete node samples and recovery.
+Use the [administration README](README.md#testing) for job-level test commands.
 
 The private footprint interface needs testing on each OS and architecture.
 Implementation references: XNU [spawn attributes](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/libsyscall/wrappers/spawn/posix_spawn.c)

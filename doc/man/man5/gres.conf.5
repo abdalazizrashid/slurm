@@ -59,11 +59,22 @@ Currently, the options are:
 \fBfull\fR
 On \fBslurmd\fR, try all hardware detection mechanisms in order (NVML, NVIDIA,
 RSMI, oneAPI, NRT) until GPUs are detected, stopping after the first one that
-finds a device.
+finds a device. On macOS, Metal is probed first when built in.
 
 \fBNOTE\fR: This is the default for dynamic nodes (\fBslurmd \-Z\fR) when
 gres.conf has no \fBAutoDetect\fR setting and no explicit \fBName=gpu\fR
 records.
+.IP
+
+.TP
+\fBmetal\fR
+Automatically detect Metal GPUs on macOS. Requires Metal and Foundation
+frameworks and an Objective-C compiler with ARC support when building Slurm.
+Devices use registry IDs without device files. File, Cores, Links and vendor
+visibility flags are unsupported. SLURM_METAL_DEVICE_IDS provides advisory
+application selection; it does not restrict GPU access. GPU utilization,
+per-process GPU memory, energy and frequency control are unavailable.
+See \fIhttps://slurm.schedmd.com/metal.html\fR.
 .IP
 
 .TP
